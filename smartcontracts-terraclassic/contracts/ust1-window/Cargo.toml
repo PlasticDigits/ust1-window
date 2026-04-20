@@ -1,0 +1,25 @@
+[package]
+name = "ust1-window"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+library = []
+
+[dependencies]
+cosmwasm-std = { workspace = true }
+cosmwasm-schema = { workspace = true }
+cw-storage-plus = { workspace = true }
+cw2 = { workspace = true }
+cw20 = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+ust1-common = { workspace = true }
+ust1-oracle = { path = "../ust1-oracle", features = ["library"] }
+
+[dev-dependencies]
+cw-multi-test = { workspace = true }

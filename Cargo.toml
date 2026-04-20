@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+  "smartcontracts-terraclassic/packages/ust1-common",
+  "smartcontracts-terraclassic/contracts/ust1-oracle",
+  "smartcontracts-terraclassic/contracts/ust1-window",
+  "smartcontracts-terraclassic/tests",
+  "oracle-service",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+cosmwasm-std = { version = "1.5.11", features = ["staking"] }
+cosmwasm-schema = "1.5.9"
+cw-storage-plus = "1.2.0"
+cw2 = "1.1.2"
+cw20 = "1.1.2"
+cw20-base = { version = "1.1.2", features = ["library"] }
+cw-utils = "1.0.3"
+cw-multi-test = "1.2.0"
+thiserror = "1.0.4"
+schemars = "0.8.15"
+serde = { version = "1.0.188", default-features = false, features = ["derive"] }
+ust1-common = { path = "smartcontracts-terraclassic/packages/ust1-common" }
+cw20-mintable = { git = "https://github.com/PlasticDigits/cw20-mintable", features = ["library"] }
+proptest = "1"
+
+[profile.release]
+opt-level = 3
+debug = false
+overflow-checks = true
+lto = true
+codegen-units = 1

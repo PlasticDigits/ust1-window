@@ -1,0 +1,12 @@
+[package]
+name = "ust1-common"
+version.workspace = true
+edition.workspace = true
+description = "Shared constants and pure math for UST1 oracle and window contracts"
+
+[dependencies]
+cosmwasm-std = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

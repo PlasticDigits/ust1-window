@@ -1,0 +1,11 @@
+services:
+  localterra:
+    image: ghcr.io/plasticdigits/localterra-cl8y@sha256:9a58488b7fd65fd6a87e43384c0ee3023178378402505bbd8bcd114ce0c9938e
+    ports:
+      - "1317:1317"
+      - "26657:26657"
+    volumes:
+      - localterra-data:/home/terra/.terra
+
+volumes:
+  localterra-data:

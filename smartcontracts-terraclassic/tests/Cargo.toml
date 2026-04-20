@@ -1,0 +1,15 @@
+[package]
+name = "ust1-integration-tests"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cosmwasm-std = { workspace = true }
+cw-multi-test = { workspace = true }
+cw20 = { workspace = true }
+cw20-mintable = { workspace = true }
+ust1-common = { workspace = true }
+ust1-oracle = { path = "../contracts/ust1-oracle", features = ["library"] }
+ust1-window = { path = "../contracts/ust1-window", features = ["library"] }
+serde = { workspace = true }
+proptest = { workspace = true }

@@ -1,0 +1,7 @@
+# Gitleaks configuration (https://github.com/gitleaks/gitleaks)
+# Add [[allowlists]] or path-specific rules here if a false positive appears.
+
+title = "ust1-window"
+
+[extend]
+useDefault = true
