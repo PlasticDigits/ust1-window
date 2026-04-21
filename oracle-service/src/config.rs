@@ -131,7 +131,8 @@ impl Config {
         let venus_vtoken_address = std::env::var("VENUS_VTOKEN_ADDRESS")
             .map_err(|_| eyre!("VENUS_VTOKEN_ADDRESS is required"))?;
         validate_venus_vtoken_address(&venus_vtoken_address, &allowed_bsc_chain_ids)?;
-        let terra_lcd_url = std::env::var("TERRA_LCD_URL").map_err(|_| eyre!("TERRA_LCD_URL is required"))?;
+        let terra_lcd_url =
+            std::env::var("TERRA_LCD_URL").map_err(|_| eyre!("TERRA_LCD_URL is required"))?;
         validate_https_url(&terra_lcd_url, "TERRA_LCD_URL", allow_dev_http)?;
         Ok(Config {
             bsc_rpc_urls,

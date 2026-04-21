@@ -4,10 +4,8 @@ use cosmwasm_std::{to_json_binary, Addr, Empty, Timestamp, Uint128};
 use cw20::{Cw20ExecuteMsg, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
 
-use crate::msg::{Cw20HookMsg, ConfigResponse, ExecuteMsg, InstantiateMsg, QueryMsg};
-use ust1_common::{
-    DEFAULT_MAX_ORACLE_AGE_SECS, MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE,
-};
+use crate::msg::{ConfigResponse, Cw20HookMsg, ExecuteMsg, InstantiateMsg, QueryMsg};
+use ust1_common::{DEFAULT_MAX_ORACLE_AGE_SECS, MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE};
 use ust1_oracle::msg as oracle_msg;
 
 fn oracle_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
@@ -604,7 +602,10 @@ fn set_max_oracle_age_governance_only() {
 #[test]
 fn set_max_oracle_age_below_oracle_throttle_rejected() {
     let Env {
-        mut app, owner, window, ..
+        mut app,
+        owner,
+        window,
+        ..
     } = setup();
 
     let err = app

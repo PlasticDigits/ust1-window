@@ -125,9 +125,9 @@ pub fn execute(
         } => exec_set_limits(deps, info, per_tx_ust1_limit, rolling_24h_ust1_limit),
         ExecuteMsg::SetPaused { paused } => exec_set_paused(deps, info, paused),
         ExecuteMsg::SetFeeBps { fee_bps } => exec_set_fee_bps(deps, info, fee_bps),
-        ExecuteMsg::SetMaxOracleAge {
-            max_oracle_age_sec,
-        } => exec_set_max_oracle_age(deps, info, max_oracle_age_sec),
+        ExecuteMsg::SetMaxOracleAge { max_oracle_age_sec } => {
+            exec_set_max_oracle_age(deps, info, max_oracle_age_sec)
+        }
         ExecuteMsg::ProposeGovernance { address } => exec_propose_gov(deps, info, address),
         ExecuteMsg::AcceptGovernance {} => exec_accept_gov(deps, info),
     }

@@ -2,9 +2,7 @@
 use cosmwasm_std::{to_json_binary, Addr, Empty, Timestamp, Uint128};
 use cw20::{Cw20ExecuteMsg, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
-use ust1_common::{
-    DEFAULT_MAX_ORACLE_AGE_SECS, MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE,
-};
+use ust1_common::{DEFAULT_MAX_ORACLE_AGE_SECS, MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE};
 use ust1_oracle::msg as oracle_msg;
 use ust1_window::msg as window_msg;
 
