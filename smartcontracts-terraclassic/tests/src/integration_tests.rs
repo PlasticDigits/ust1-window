@@ -35,8 +35,17 @@ fn cw20_mintable_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
     Box::new(c)
 }
 
-#[test]
-fn deposit_and_withdraw_round_trip() {
+struct WindowEnv {
+    app: App,
+    owner: Addr,
+    user: Addr,
+    oracle: Addr,
+    vfdusd: Addr,
+    ust1: Addr,
+    window: Addr,
+}
+
+fn setup_window_env() -> WindowEnv {
     let mut app = App::default();
     let owner = Addr::unchecked("owner");
     let bot = Addr::unchecked("bot");
@@ -122,7 +131,6 @@ fn deposit_and_withdraw_round_trip() {
         )
         .unwrap();
 
-    // Allow window to mint UST1
     app.execute_contract(
         owner.clone(),
         ust1.clone(),
@@ -133,7 +141,29 @@ fn deposit_and_withdraw_round_trip() {
     )
     .unwrap();
 
-    // Seed user with vFDUSD
+    WindowEnv {
+        app,
+        owner,
+        user,
+        oracle,
+        vfdusd,
+        ust1,
+        window,
+    }
+}
+
+#[test]
+fn deposit_and_withdraw_round_trip() {
+    let WindowEnv {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        ust1,
+        window,
+        ..
+    } = setup_window_env();
+
     app.execute_contract(
         owner.clone(),
         vfdusd.clone(),
@@ -169,7 +199,6 @@ fn deposit_and_withdraw_round_trip() {
         .unwrap();
     assert!(bal.balance > Uint128::zero());
 
-    // Withdraw: send UST1 back for vFDUSD
     let w_hook = window_msg::Cw20HookMsg::Withdraw {
         min_vfdusd_out: Uint128::zero(),
     };
@@ -195,4 +224,105 @@ fn deposit_and_withdraw_round_trip() {
         )
         .unwrap();
     assert!(vbal.balance > Uint128::zero());
+}
+
+#[test]
+fn set_fee_bps_governance_validation_and_swap_math() {
+    let WindowEnv {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        ust1,
+        window,
+        oracle,
+    } = setup_window_env();
+
+    let stranger = Addr::unchecked("stranger");
+    let err = app
+        .execute_contract(
+            stranger,
+            window.clone(),
+            &window_msg::ExecuteMsg::SetFeeBps { fee_bps: 100 },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("unauthorized"),
+        "unexpected err: {err}"
+    );
+
+    let err = app
+        .execute_contract(
+            owner.clone(),
+            window.clone(),
+            &window_msg::ExecuteMsg::SetFeeBps { fee_bps: 10_001 },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("fee bps"),
+        "unexpected err: {err}"
+    );
+
+    app.execute_contract(
+        owner.clone(),
+        window.clone(),
+        &window_msg::ExecuteMsg::SetFeeBps { fee_bps: 100 },
+        &[],
+    )
+    .unwrap();
+
+    let cfg: window_msg::ConfigResponse = app
+        .wrap()
+        .query_wasm_smart(&window, &window_msg::QueryMsg::Config {})
+        .unwrap();
+    assert_eq!(cfg.fee_bps, 100);
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(10_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let amount_vfdusd = Uint128::from(1_000_000u128);
+    let hook = window_msg::Cw20HookMsg::Deposit {};
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: amount_vfdusd,
+            msg: to_json_binary(&hook).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let rate: ust1_oracle::msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(oracle, &oracle_msg::QueryMsg::State {})
+        .unwrap();
+    let expected_ust1 = ust1_common::math::deposit_vfdusd_to_ust1(
+        amount_vfdusd,
+        rate.rate,
+        100,
+    )
+    .unwrap();
+
+    let bal: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            ust1.clone(),
+            &cw20::Cw20QueryMsg::Balance {
+                address: user.to_string(),
+            },
+        )
+        .unwrap();
+    assert_eq!(bal.balance, expected_ust1);
 }

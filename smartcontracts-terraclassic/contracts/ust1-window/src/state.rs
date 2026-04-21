@@ -14,6 +14,7 @@ pub struct Config {
     pub oracle: Addr,
     pub vfdusd_token: Addr,
     pub ust1_token: Addr,
+    /// UST1-leg swap fee in basis points; updatable via governance (`SetFeeBps`).
     pub fee_bps: u16,
     pub per_tx_ust1_limit: Uint128,
     pub rolling_24h_ust1_limit: Uint128,

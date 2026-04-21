@@ -31,6 +31,8 @@ pub enum ExecuteMsg {
     SetPaused {
         paused: bool,
     },
+    /// Governance-only: update UST1-leg fee (`fee_bps`); same validation as instantiate (`<= 10_000`).
+    SetFeeBps { fee_bps: u16 },
     ProposeGovernance {
         address: String,
     },

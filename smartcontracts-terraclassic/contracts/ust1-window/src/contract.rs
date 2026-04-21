@@ -91,6 +91,7 @@ pub fn execute(
             rolling_24h_ust1_limit,
         } => exec_set_limits(deps, info, per_tx_ust1_limit, rolling_24h_ust1_limit),
         ExecuteMsg::SetPaused { paused } => exec_set_paused(deps, info, paused),
+        ExecuteMsg::SetFeeBps { fee_bps } => exec_set_fee_bps(deps, info, fee_bps),
         ExecuteMsg::ProposeGovernance { address } => exec_propose_gov(deps, info, address),
         ExecuteMsg::AcceptGovernance {} => exec_accept_gov(deps, info),
     }
@@ -235,6 +236,27 @@ fn exec_set_paused(
     cfg.paused = paused;
     CONFIG.save(deps.storage, &cfg)?;
     Ok(Response::new().add_attribute("action", "set_paused"))
+}
+
+fn exec_set_fee_bps(
+    deps: DepsMut,
+    info: MessageInfo,
+    fee_bps: u16,
+) -> Result<Response, ContractError> {
+    if fee_bps as u128 > ust1_common::BPS_DENOM {
+        return Err(ContractError::Math(ust1_common::MathError::InvalidFeeBps));
+    }
+    let mut cfg = CONFIG.load(deps.storage)?;
+    if info.sender != cfg.governance {
+        return Err(ContractError::Unauthorized {});
+    }
+    let old_fee_bps = cfg.fee_bps;
+    cfg.fee_bps = fee_bps;
+    CONFIG.save(deps.storage, &cfg)?;
+    Ok(Response::new()
+        .add_attribute("action", "set_fee_bps")
+        .add_attribute("old_fee_bps", old_fee_bps.to_string())
+        .add_attribute("new_fee_bps", fee_bps.to_string()))
 }
 
 fn exec_propose_gov(
