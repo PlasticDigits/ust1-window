@@ -10,6 +10,7 @@ use cosmrs::tx::{self, Fee, Msg, SignDoc, SignerInfo};
 use cosmrs::{AccountId, Coin};
 use eyre::{eyre, Result, WrapErr};
 use reqwest::Client;
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use serde::Serialize;
 use std::time::Duration;
@@ -19,23 +20,12 @@ pub const TERRA_DERIVATION_PATH: &str = "m/44'/330'/0'/0/0";
 pub const DEFAULT_GAS_LIMIT: u64 = 500_000u64;
 pub const DEFAULT_GAS_PRICE: f64 = 0.015_f64;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TerraSignerConfig {
     pub lcd_url: String,
     pub chain_id: String,
-    pub mnemonic: String,
+    pub mnemonic: SecretString,
     pub gas_limit: Option<u64>,
-}
-
-impl std::fmt::Debug for TerraSignerConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TerraSignerConfig")
-            .field("lcd_url", &self.lcd_url)
-            .field("chain_id", &self.chain_id)
-            .field("mnemonic", &"<redacted>")
-            .field("gas_limit", &self.gas_limit)
-            .finish()
-    }
 }
 
 pub struct TerraSigner {
@@ -59,7 +49,8 @@ impl TerraSigner {
             .timeout(Duration::from_secs(30))
             .build()
             .wrap_err("HTTP client")?;
-        let mnemonic = Mnemonic::parse(&config.mnemonic).map_err(|e| eyre!("mnemonic: {}", e))?;
+        let mnemonic = Mnemonic::parse(config.mnemonic.expose_secret())
+            .map_err(|e| eyre!("mnemonic: {}", e))?;
         let seed = mnemonic.to_seed("");
         let path: DerivationPath = TERRA_DERIVATION_PATH
             .parse()

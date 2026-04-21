@@ -2,6 +2,7 @@
 
 use alloy::primitives::Address;
 use eyre::{eyre, Result};
+use secrecy::SecretString;
 use std::str::FromStr;
 use url::Url;
 
@@ -74,7 +75,7 @@ fn validate_https_url(url_str: &str, field: &str, allow_dev_http: bool) -> Resul
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub bsc_rpc_urls: Vec<String>,
     /// How many blocks behind `latest` to read `exchangeRateStored` (reorg protection).
@@ -85,31 +86,12 @@ pub struct Config {
     pub venus_vtoken_address: String,
     pub terra_lcd_url: String,
     pub terra_chain_id: String,
-    pub terra_mnemonic: String,
+    /// Operator seed phrase; only call `ExposeSecret::expose_secret` at signing boundaries.
+    pub terra_mnemonic: SecretString,
     pub oracle_contract: String,
     pub poll_interval_secs: u64,
     /// Emit a loud log if no successful Terra broadcast for this many seconds (default 8h).
     pub max_silence_since_broadcast_secs: u64,
-}
-
-impl std::fmt::Debug for Config {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Config")
-            .field("bsc_rpc_urls", &self.bsc_rpc_urls)
-            .field("bsc_confirmation_blocks", &self.bsc_confirmation_blocks)
-            .field("allowed_bsc_chain_ids", &self.allowed_bsc_chain_ids)
-            .field("venus_vtoken_address", &self.venus_vtoken_address)
-            .field("terra_lcd_url", &self.terra_lcd_url)
-            .field("terra_chain_id", &self.terra_chain_id)
-            .field("terra_mnemonic", &"<redacted>")
-            .field("oracle_contract", &self.oracle_contract)
-            .field("poll_interval_secs", &self.poll_interval_secs)
-            .field(
-                "max_silence_since_broadcast_secs",
-                &self.max_silence_since_broadcast_secs,
-            )
-            .finish()
-    }
 }
 
 impl Config {
@@ -145,8 +127,11 @@ impl Config {
             terra_lcd_url,
             terra_chain_id: std::env::var("TERRA_CHAIN_ID")
                 .unwrap_or_else(|_| "columbus-5".to_string()),
-            terra_mnemonic: std::env::var("TERRA_MNEMONIC")
-                .map_err(|_| eyre!("TERRA_MNEMONIC is required"))?,
+            terra_mnemonic: SecretString::new(
+                std::env::var("TERRA_MNEMONIC")
+                    .map_err(|_| eyre!("TERRA_MNEMONIC is required"))?
+                    .into_boxed_str(),
+            ),
             oracle_contract: std::env::var("ORACLE_CONTRACT")
                 .map_err(|_| eyre!("ORACLE_CONTRACT is required"))?,
             poll_interval_secs: std::env::var("POLL_INTERVAL_SECS")
@@ -201,7 +186,11 @@ mod tests {
             venus_vtoken_address: CANONICAL_VENUS_VFDUSD_BSC_MAINNET.into(),
             terra_lcd_url: String::new(),
             terra_chain_id: String::new(),
-            terra_mnemonic: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".into(),
+            terra_mnemonic: SecretString::new(
+                "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+                    .to_string()
+                    .into_boxed_str(),
+            ),
             oracle_contract: String::new(),
             poll_interval_secs: 0,
             max_silence_since_broadcast_secs: 28_800,
@@ -211,6 +200,9 @@ mod tests {
             !s.contains("abandon"),
             "Debug must not echo mnemonic words: {s}"
         );
-        assert!(s.contains("redacted"), "{s}");
+        assert!(
+            s.contains("REDACTED") || s.contains("SecretBox") || s.contains("SecretString"),
+            "expected secrecy-style redacted Debug, got: {s}"
+        );
     }
 }
