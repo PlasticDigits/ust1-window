@@ -25,7 +25,7 @@ thiserror = "1.0.4"
 schemars = "0.8.15"
 serde = { version = "1.0.188", default-features = false, features = ["derive"] }
 ust1-common = { path = "smartcontracts-terraclassic/packages/ust1-common" }
-cw20-mintable = { git = "https://github.com/PlasticDigits/cw20-mintable", features = ["library"] }
+cw20-mintable = { git = "https://github.com/PlasticDigits/cw20-mintable", rev = "73a206b5c39c5bd8f9d3574bda32fc5ae8f52ec8", features = ["library"] }
 proptest = "1"
 
 [profile.release]

@@ -1480,7 +1480,7 @@ dependencies = [
 [[package]]
 name = "cw20-mintable"
 version = "0.1.0"
-source = "git+https://github.com/PlasticDigits/cw20-mintable#73a206b5c39c5bd8f9d3574bda32fc5ae8f52ec8"
+source = "git+https://github.com/PlasticDigits/cw20-mintable?rev=73a206b5c39c5bd8f9d3574bda32fc5ae8f52ec8#73a206b5c39c5bd8f9d3574bda32fc5ae8f52ec8"
 dependencies = [
  "base64ct",
  "cosmwasm-schema",
