@@ -41,8 +41,10 @@ impl Config {
         let bsc_raw = std::env::var("BSC_RPC_URLS")
             .map_err(|_| eyre!("BSC_RPC_URLS is required (comma-separated)"))?;
         let bsc_rpc_urls = crate::evm_rpc::parse_comma_separated_rpc_urls(&bsc_raw);
-        if bsc_rpc_urls.is_empty() {
-            return Err(eyre!("BSC_RPC_URLS must list at least one URL"));
+        if bsc_rpc_urls.len() < 2 {
+            return Err(eyre!(
+                "BSC_RPC_URLS must list at least two comma-separated URLs (multi-provider consensus)"
+            ));
         }
         let venus_vtoken_address = std::env::var("VENUS_VTOKEN_ADDRESS")
             .map_err(|_| eyre!("VENUS_VTOKEN_ADDRESS is required"))?;
