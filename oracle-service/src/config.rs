@@ -25,6 +25,8 @@ fn validate_venus_vtoken_address(addr: &str) -> Result<()> {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bsc_rpc_urls: Vec<String>,
+    /// How many blocks behind `latest` to read `exchangeRateStored` (reorg protection).
+    pub bsc_confirmation_blocks: u64,
     pub venus_vtoken_address: String,
     pub terra_lcd_url: String,
     pub terra_chain_id: String,
@@ -47,6 +49,10 @@ impl Config {
         validate_venus_vtoken_address(&venus_vtoken_address)?;
         Ok(Config {
             bsc_rpc_urls,
+            bsc_confirmation_blocks: std::env::var("BSC_CONFIRMATION_BLOCKS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(15),
             venus_vtoken_address,
             terra_lcd_url: std::env::var("TERRA_LCD_URL")
                 .map_err(|_| eyre!("TERRA_LCD_URL is required"))?,

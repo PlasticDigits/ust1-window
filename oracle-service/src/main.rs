@@ -42,7 +42,8 @@ async fn run_once(cfg: &config::Config, signer: &terra_tx::TerraSigner) -> Resul
     let urls = &cfg.bsc_rpc_urls;
     let proposed: Uint128 = evm_rpc::run_with_evm_rpc_url_fallback(urls, |url| {
         let v = cfg.venus_vtoken_address.clone();
-        async move { bsc::read_exchange_rate_stored(url, &v).await }
+        let confirm = cfg.bsc_confirmation_blocks;
+        async move { bsc::read_exchange_rate_stored(url, &v, confirm).await }
     })
     .await?;
 
