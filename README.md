@@ -29,6 +29,14 @@ make test-contracts
 # cargo run -p ust1-oracle-service
 ```
 
+## Oracle service: observability and deployment
+
+The `ust1-oracle-service` binary is intentionally **lightweight**: it uses **structured `tracing` logs only** (no Prometheus or in-process metrics server). Every `check_rate_update` and `sign_and_broadcast_execute` outcome is logged at `info` (policy result) or `info`/`warn` (broadcast). If there has been **no successful on-chain broadcast** for longer than **`ORACLE_MAX_SILENCE_SECS`** (default **28800**, i.e. 8 hours), the process emits a **high-visibility `error!` liveness alert** on each poll tick.
+
+**Deployment** (e.g. [Render](https://render.com)): the platform should provide an **HTTP health check** and **uptime / failure alerting** on the service URL or process, similar to Render’s built-in health checks and notifications. Whatever host you use must offer **comparable external monitoring** so silent process hangs or repeated crashes are surfaced; the in-process log alert is not a substitute for off-platform paging.
+
+Relevant environment variables: `ORACLE_MAX_SILENCE_SECS`, `POLL_INTERVAL_SECS`, plus the oracle env vars listed under Local development above.
+
 ## Build optimized Wasm
 
 ```bash

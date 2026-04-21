@@ -33,6 +33,8 @@ pub struct Config {
     pub terra_mnemonic: String,
     pub oracle_contract: String,
     pub poll_interval_secs: u64,
+    /// Emit a loud log if no successful Terra broadcast for this many seconds (default 8h).
+    pub max_silence_since_broadcast_secs: u64,
 }
 
 impl Config {
@@ -68,6 +70,10 @@ impl Config {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(21_600),
+            max_silence_since_broadcast_secs: std::env::var("ORACLE_MAX_SILENCE_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(28_800),
         })
     }
 }

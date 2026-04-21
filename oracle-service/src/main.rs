@@ -3,11 +3,15 @@
 mod bsc;
 mod config;
 mod evm_rpc;
+mod liveness;
 mod terra_tx;
+
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cosmwasm_std::Uint128;
 use eyre::Result;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use ust1_common::oracle_policy::check_rate_update;
 use ust1_oracle::msg::{ExecuteMsg, QueryMsg, StateResponse};
 
@@ -28,17 +32,43 @@ async fn main() -> Result<()> {
         gas_limit: None,
     })?;
 
-    info!(address = %signer.address_str(), "oracle operator");
+    let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
+    let max_silence = Duration::from_secs(cfg.max_silence_since_broadcast_secs);
+
+    info!(
+        address = %signer.address_str(),
+        poll_interval_secs = cfg.poll_interval_secs,
+        max_silence_since_broadcast_secs = cfg.max_silence_since_broadcast_secs,
+        "oracle operator"
+    );
 
     loop {
-        if let Err(e) = run_once(&cfg, &signer).await {
+        {
+            let tracker = liveness.lock().expect("liveness mutex poisoned");
+            if tracker.should_alert(max_silence) {
+                let silence_secs = tracker.silence_since_last_broadcast().as_secs();
+                error!(
+                    target: "ust1_oracle_service",
+                    alert = "LIVENESS_ORACLE_NO_BROADCAST",
+                    silence_secs,
+                    threshold_secs = cfg.max_silence_since_broadcast_secs,
+                    "LIVENESS ALERT: no successful Terra oracle broadcast within the configured silence window; \
+                     on-chain rate may be stale — investigate LCD, BSC RPC, keys, and policy"
+                );
+            }
+        }
+        if let Err(e) = run_once(&cfg, &signer, &liveness).await {
             warn!(error = %e, "tick failed");
         }
         tokio::time::sleep(std::time::Duration::from_secs(cfg.poll_interval_secs)).await;
     }
 }
 
-async fn run_once(cfg: &config::Config, signer: &terra_tx::TerraSigner) -> Result<()> {
+async fn run_once(
+    cfg: &config::Config,
+    signer: &terra_tx::TerraSigner,
+    liveness: &Arc<Mutex<liveness::LivenessTracker>>,
+) -> Result<()> {
     let urls = &cfg.bsc_rpc_urls;
     let proposed: Uint128 = evm_rpc::run_with_evm_rpc_rate_consensus(urls, |url| {
         let v = cfg.venus_vtoken_address.clone();
@@ -66,15 +96,34 @@ async fn run_once(cfg: &config::Config, signer: &terra_tx::TerraSigner) -> Resul
     );
 
     match check {
-        Ok(_) => {
+        Ok((day_id, baseline)) => {
+            info!(
+                event = "check_rate_update",
+                outcome = "ok",
+                day_id,
+                baseline = %baseline,
+                proposed = %proposed,
+                "policy allows oracle update"
+            );
             let msg = ExecuteMsg::UpdateRate { new_rate: proposed };
             let txh = signer
                 .sign_and_broadcast_execute(&cfg.oracle_contract, &msg)
                 .await?;
+            liveness
+                .lock()
+                .expect("liveness mutex poisoned")
+                .record_successful_broadcast();
             info!(tx_hash = %txh, new_rate = %proposed, "submitted oracle update");
         }
         Err(e) => {
-            info!(?e, proposed = %proposed, "skip update (policy or no change)");
+            info!(
+                event = "check_rate_update",
+                outcome = "failed",
+                error = ?e,
+                proposed = %proposed,
+                current = %state.rate,
+                "skip update (policy rejection)"
+            );
         }
     }
     Ok(())
