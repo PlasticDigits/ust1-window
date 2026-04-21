@@ -25,6 +25,8 @@ async fn main() -> Result<()> {
         .init();
 
     let cfg = config::Config::from_env()?;
+    info!(allowed_chain_ids = ?cfg.allowed_bsc_chain_ids, "BSC EVM chain allowlist");
+    bsc::verify_all_bsc_rpc_urls(&cfg.bsc_rpc_urls, &cfg.allowed_bsc_chain_ids).await?;
     let signer = terra_tx::TerraSigner::new(terra_tx::TerraSignerConfig {
         lcd_url: cfg.terra_lcd_url.clone(),
         chain_id: cfg.terra_chain_id.clone(),
@@ -70,10 +72,12 @@ async fn run_once(
     liveness: &Arc<Mutex<liveness::LivenessTracker>>,
 ) -> Result<()> {
     let urls = &cfg.bsc_rpc_urls;
+    let allowed = cfg.allowed_bsc_chain_ids.clone();
     let proposed: Uint128 = evm_rpc::run_with_evm_rpc_rate_consensus(urls, |url| {
         let v = cfg.venus_vtoken_address.clone();
         let confirm = cfg.bsc_confirmation_blocks;
-        async move { bsc::read_exchange_rate_stored(url, &v, confirm).await }
+        let allowed = allowed.clone();
+        async move { bsc::read_exchange_rate_stored(url, &v, confirm, &allowed).await }
     })
     .await?;
 

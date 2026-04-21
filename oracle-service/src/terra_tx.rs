@@ -19,12 +19,23 @@ pub const TERRA_DERIVATION_PATH: &str = "m/44'/330'/0'/0/0";
 pub const DEFAULT_GAS_LIMIT: u64 = 500_000u64;
 pub const DEFAULT_GAS_PRICE: f64 = 0.015_f64;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TerraSignerConfig {
     pub lcd_url: String,
     pub chain_id: String,
     pub mnemonic: String,
     pub gas_limit: Option<u64>,
+}
+
+impl std::fmt::Debug for TerraSignerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TerraSignerConfig")
+            .field("lcd_url", &self.lcd_url)
+            .field("chain_id", &self.chain_id)
+            .field("mnemonic", &"<redacted>")
+            .field("gas_limit", &self.gas_limit)
+            .finish()
+    }
 }
 
 pub struct TerraSigner {

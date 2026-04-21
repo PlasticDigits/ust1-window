@@ -4530,6 +4530,7 @@ dependencies = [
  "tokio-test",
  "tracing",
  "tracing-subscriber",
+ "url",
  "ust1-common",
  "ust1-oracle",
 ]
