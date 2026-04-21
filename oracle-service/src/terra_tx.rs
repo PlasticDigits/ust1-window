@@ -13,6 +13,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use serde::Serialize;
 use std::time::Duration;
+use tracing::{info, warn};
 
 pub const TERRA_DERIVATION_PATH: &str = "m/44'/330'/0'/0/0";
 pub const DEFAULT_GAS_LIMIT: u64 = 500_000u64;
@@ -139,6 +140,36 @@ impl TerraSigner {
         contract_address: &str,
         msg: &impl Serialize,
     ) -> Result<String> {
+        let contract = contract_address.to_string();
+        let result = self.sign_and_broadcast_execute_inner(&contract, msg).await;
+        match &result {
+            Ok(txh) => {
+                info!(
+                    event = "sign_and_broadcast_execute",
+                    outcome = "ok",
+                    contract = %contract,
+                    tx_hash = %txh,
+                    "broadcast accepted"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    event = "sign_and_broadcast_execute",
+                    outcome = "failed",
+                    contract = %contract,
+                    error = %e,
+                    "sign_and_broadcast_execute failed"
+                );
+            }
+        }
+        result
+    }
+
+    async fn sign_and_broadcast_execute_inner(
+        &self,
+        contract_address: &str,
+        msg: &impl Serialize,
+    ) -> Result<String> {
         let account_info = self.get_account_info().await?;
         let gas_price = DEFAULT_GAS_PRICE;
         let fee_amount = ((self.gas_limit as f64) * gas_price).ceil() as u128;
@@ -188,12 +219,23 @@ impl TerraSigner {
         if !status.is_success() {
             return Err(eyre!("broadcast http {}: {}", status, body));
         }
-        let txhash = body
-            .get("tx_response")
-            .and_then(|r| r.get("txhash"))
+        let tx_response = body.get("tx_response").cloned().unwrap_or_default();
+        let code = tx_response
+            .get("code")
+            .and_then(|c| c.as_u64())
+            .unwrap_or(1);
+        let txhash = tx_response
+            .get("txhash")
             .and_then(|h| h.as_str())
             .unwrap_or("")
             .to_string();
+        if code != 0 {
+            let raw_log = tx_response
+                .get("raw_log")
+                .and_then(|l| l.as_str())
+                .unwrap_or("");
+            return Err(eyre!("broadcast tx failed code {}: {}", code, raw_log));
+        }
         Ok(txhash)
     }
 }
