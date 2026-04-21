@@ -308,12 +308,8 @@ fn set_fee_bps_governance_validation_and_swap_math() {
         .wrap()
         .query_wasm_smart(oracle, &oracle_msg::QueryMsg::State {})
         .unwrap();
-    let expected_ust1 = ust1_common::math::deposit_vfdusd_to_ust1(
-        amount_vfdusd,
-        rate.rate,
-        100,
-    )
-    .unwrap();
+    let expected_ust1 =
+        ust1_common::math::deposit_vfdusd_to_ust1(amount_vfdusd, rate.rate, 100).unwrap();
 
     let bal: cw20::BalanceResponse = app
         .wrap()
@@ -325,4 +321,36 @@ fn set_fee_bps_governance_validation_and_swap_math() {
         )
         .unwrap();
     assert_eq!(bal.balance, expected_ust1);
+}
+
+/// Window `EffectiveSwap` must mirror direct oracle `State` and window `Config` (issue #4).
+#[test]
+fn effective_swap_query_matches_oracle_and_window_config() {
+    let WindowEnv {
+        app,
+        oracle,
+        window,
+        ..
+    } = setup_window_env();
+
+    let direct_oracle: oracle_msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(&oracle, &oracle_msg::QueryMsg::State {})
+        .unwrap();
+    let cfg: window_msg::ConfigResponse = app
+        .wrap()
+        .query_wasm_smart(&window, &window_msg::QueryMsg::Config {})
+        .unwrap();
+    let eff: window_msg::EffectiveSwapResponse = app
+        .wrap()
+        .query_wasm_smart(&window, &window_msg::QueryMsg::EffectiveSwap {})
+        .unwrap();
+
+    assert_eq!(eff.oracle, direct_oracle);
+    assert_eq!(eff.fee_bps, cfg.fee_bps);
+    assert_eq!(eff.per_tx_ust1_limit, cfg.per_tx_ust1_limit);
+    assert_eq!(eff.rolling_24h_ust1_limit, cfg.rolling_24h_ust1_limit);
+    assert_eq!(eff.paused, cfg.paused);
+    assert_eq!(eff.rolling_window_start_sec, 0);
+    assert_eq!(eff.rolling_volume_ust1, Uint128::zero());
 }

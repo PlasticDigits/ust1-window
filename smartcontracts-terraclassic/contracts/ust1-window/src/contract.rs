@@ -8,21 +8,25 @@ use cw2::set_contract_version;
 use cw20::{Cw20ExecuteMsg, Cw20ReceiveMsg};
 
 use crate::error::ContractError;
-use crate::msg::{ConfigResponse, Cw20HookMsg, ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
+use crate::msg::{
+    ConfigResponse, Cw20HookMsg, EffectiveSwapResponse, ExecuteMsg, InstantiateMsg, MigrateMsg,
+    QueryMsg,
+};
 use crate::state::{
     Config, PendingGovernance, RollingVolume, CONFIG, CONTRACT_NAME, CONTRACT_VERSION,
     PENDING_GOVERNANCE, ROLLING,
 };
 
-fn query_oracle_rate(deps: Deps, oracle: &cosmwasm_std::Addr) -> StdResult<Uint128> {
+fn query_oracle_state(
+    deps: Deps,
+    oracle: &cosmwasm_std::Addr,
+) -> StdResult<ust1_oracle::msg::StateResponse> {
     let q = ust1_oracle::msg::QueryMsg::State {};
     let bin = to_json_binary(&q)?;
-    let resp: ust1_oracle::msg::StateResponse =
-        deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
-            contract_addr: oracle.to_string(),
-            msg: bin,
-        }))?;
-    Ok(resp.rate)
+    deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
+        contract_addr: oracle.to_string(),
+        msg: bin,
+    }))
 }
 
 fn ensure_limits(
@@ -131,7 +135,7 @@ fn deposit(
     if !matches!(hook, Cw20HookMsg::Deposit {}) {
         return Err(ContractError::InvalidCw20Hook {});
     }
-    let rate = query_oracle_rate(deps.as_ref(), &cfg.oracle)?;
+    let rate = query_oracle_state(deps.as_ref(), &cfg.oracle)?.rate;
     let ust1_out = ust1_common::math::deposit_vfdusd_to_ust1(amount_vfdusd, rate, cfg.fee_bps)?;
 
     let mut rolling = ROLLING.load(deps.storage)?;
@@ -166,7 +170,7 @@ fn withdraw(
         _ => return Err(ContractError::InvalidCw20Hook {}),
     };
 
-    let rate = query_oracle_rate(deps.as_ref(), &cfg.oracle)?;
+    let rate = query_oracle_state(deps.as_ref(), &cfg.oracle)?.rate;
     let v_out = ust1_common::math::withdraw_gross_ust1_to_vfdusd(gross_ust1, rate, cfg.fee_bps)?;
     if v_out < min_out {
         return Err(ContractError::BelowMinimum {});
@@ -290,6 +294,7 @@ fn exec_accept_gov(deps: DepsMut, info: MessageInfo) -> Result<Response, Contrac
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::Config {} => to_json_binary(&query_config(deps)?),
+        QueryMsg::EffectiveSwap {} => to_json_binary(&query_effective_swap(deps)?),
     }
 }
 
@@ -304,6 +309,21 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
         per_tx_ust1_limit: c.per_tx_ust1_limit,
         rolling_24h_ust1_limit: c.rolling_24h_ust1_limit,
         paused: c.paused,
+    })
+}
+
+fn query_effective_swap(deps: Deps) -> StdResult<EffectiveSwapResponse> {
+    let cfg = CONFIG.load(deps.storage)?;
+    let rolling = ROLLING.load(deps.storage)?;
+    let oracle = query_oracle_state(deps, &cfg.oracle)?;
+    Ok(EffectiveSwapResponse {
+        fee_bps: cfg.fee_bps,
+        per_tx_ust1_limit: cfg.per_tx_ust1_limit,
+        rolling_24h_ust1_limit: cfg.rolling_24h_ust1_limit,
+        paused: cfg.paused,
+        rolling_window_start_sec: rolling.window_start_sec,
+        rolling_volume_ust1: rolling.volume_ust1,
+        oracle,
     })
 }
 
