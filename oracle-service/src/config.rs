@@ -1,6 +1,26 @@
 //! Environment configuration for `ust1-oracle-service`.
 
+use alloy::primitives::Address;
 use eyre::{eyre, Result};
+use std::str::FromStr;
+
+/// Canonical Venus vFDUSD vToken on BSC mainnet (EVM-03 / glab #9).
+const CANONICAL_VENUS_VFDUSD_BSC_MAINNET: &str = "0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba";
+
+fn validate_venus_vtoken_address(addr: &str) -> Result<()> {
+    let got = Address::from_str(addr.trim())
+        .map_err(|e| eyre!("VENUS_VTOKEN_ADDRESS is not a valid EVM address: {}", e))?;
+    let want = Address::from_str(CANONICAL_VENUS_VFDUSD_BSC_MAINNET)
+        .map_err(|_| eyre!("internal error: canonical Venus vFDUSD address failed to parse"))?;
+    if got != want {
+        return Err(eyre!(
+            "VENUS_VTOKEN_ADDRESS must be canonical Venus vFDUSD on BSC mainnet ({}); got {}",
+            CANONICAL_VENUS_VFDUSD_BSC_MAINNET,
+            addr.trim()
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -22,10 +42,12 @@ impl Config {
         if bsc_rpc_urls.is_empty() {
             return Err(eyre!("BSC_RPC_URLS must list at least one URL"));
         }
+        let venus_vtoken_address = std::env::var("VENUS_VTOKEN_ADDRESS")
+            .map_err(|_| eyre!("VENUS_VTOKEN_ADDRESS is required"))?;
+        validate_venus_vtoken_address(&venus_vtoken_address)?;
         Ok(Config {
             bsc_rpc_urls,
-            venus_vtoken_address: std::env::var("VENUS_VTOKEN_ADDRESS")
-                .map_err(|_| eyre!("VENUS_VTOKEN_ADDRESS is required"))?,
+            venus_vtoken_address,
             terra_lcd_url: std::env::var("TERRA_LCD_URL")
                 .map_err(|_| eyre!("TERRA_LCD_URL is required"))?,
             terra_chain_id: std::env::var("TERRA_CHAIN_ID")
@@ -39,5 +61,31 @@ impl Config {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(21_600),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_accepts_canonical_checksummed() {
+        validate_venus_vtoken_address(CANONICAL_VENUS_VFDUSD_BSC_MAINNET).unwrap();
+    }
+
+    #[test]
+    fn validate_accepts_canonical_lowercase() {
+        validate_venus_vtoken_address("0xc4ef4229fec74ccfe17b2bdef7715fac740ba0ba").unwrap();
+    }
+
+    #[test]
+    fn validate_rejects_wrong_token() {
+        let err = validate_venus_vtoken_address("0x2170Ed0880ac9A755fd29B2688956BD959F933F8")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("canonical Venus vFDUSD"),
+            "{}",
+            err
+        );
     }
 }
