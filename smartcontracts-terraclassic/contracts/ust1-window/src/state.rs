@@ -5,6 +5,10 @@ use cw_storage_plus::Item;
 pub const CONTRACT_NAME: &str = "crates.io:ust1-window";
 pub const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+fn default_max_oracle_age_sec() -> u64 {
+    ust1_common::DEFAULT_MAX_ORACLE_AGE_SECS
+}
+
 /// # Invariants
 ///
 /// - **INV-LIMIT-001**: UST1 notional per swap and per rolling window must respect governance caps.
@@ -19,6 +23,9 @@ pub struct Config {
     pub per_tx_ust1_limit: Uint128,
     pub rolling_24h_ust1_limit: Uint128,
     pub paused: bool,
+    /// Reject deposits/withdraws if `block_time - oracle.last_update_sec` exceeds this (seconds).
+    #[serde(default = "default_max_oracle_age_sec")]
+    pub max_oracle_age_sec: u64,
 }
 
 pub const CONFIG: Item<Config> = Item::new("cfg");

@@ -1,11 +1,13 @@
 //! cw-multi-test coverage for **INV-LIMIT-001**, **INV-SWAP-001**, pause/ACL, and failure paths.
 
-use cosmwasm_std::{to_json_binary, Addr, Empty, Uint128};
+use cosmwasm_std::{to_json_binary, Addr, Empty, Timestamp, Uint128};
 use cw20::{Cw20ExecuteMsg, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
 
-use crate::msg::{Cw20HookMsg, ExecuteMsg, InstantiateMsg};
-use ust1_common::RATE_SCALE;
+use crate::msg::{Cw20HookMsg, ConfigResponse, ExecuteMsg, InstantiateMsg, QueryMsg};
+use ust1_common::{
+    DEFAULT_MAX_ORACLE_AGE_SECS, MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE,
+};
 use ust1_oracle::msg as oracle_msg;
 
 fn oracle_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
@@ -125,12 +127,25 @@ fn setup() -> Env {
                 fee_bps: 50,
                 per_tx_ust1_limit: Uint128::from(500_000_000u128),
                 rolling_24h_ust1_limit: Uint128::from(2_500_000_000u128),
+                max_oracle_age_sec: None,
             },
             &[],
             "window",
             None,
         )
         .unwrap();
+
+    let st: oracle_msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(&oracle, &oracle_msg::QueryMsg::State {})
+        .unwrap();
+    app.execute_contract(
+        bot.clone(),
+        oracle.clone(),
+        &oracle_msg::ExecuteMsg::UpdateRate { new_rate: st.rate },
+        &[],
+    )
+    .unwrap();
 
     app.execute_contract(
         owner.clone(),
@@ -496,4 +511,114 @@ fn withdraw_insufficient_vfdusd_in_window() {
         )
         .unwrap();
     assert_eq!(vb.balance, Uint128::zero());
+}
+
+#[test]
+fn stale_oracle_blocks_deposit() {
+    let Env {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        window,
+        ..
+    } = setup();
+
+    let t = app.block_info().time.seconds();
+    app.update_block(|b| {
+        b.time = Timestamp::from_seconds(t + DEFAULT_MAX_ORACLE_AGE_SECS + 1);
+        b.height += 1;
+    });
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(1_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let err = app
+        .execute_contract(
+            user,
+            vfdusd,
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: Uint128::from(100_000u128),
+                msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("stale"),
+        "unexpected: {err}"
+    );
+}
+
+#[test]
+fn set_max_oracle_age_governance_only() {
+    let Env {
+        mut app,
+        owner,
+        window,
+        ..
+    } = setup();
+
+    let stranger = Addr::unchecked("stranger");
+    let err = app
+        .execute_contract(
+            stranger,
+            window.clone(),
+            &ExecuteMsg::SetMaxOracleAge {
+                max_oracle_age_sec: 12 * 60 * 60,
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("unauthorized"),
+        "unexpected: {err}"
+    );
+
+    app.execute_contract(
+        owner,
+        window.clone(),
+        &ExecuteMsg::SetMaxOracleAge {
+            max_oracle_age_sec: 12 * 60 * 60,
+        },
+        &[],
+    )
+    .unwrap();
+
+    let cfg: ConfigResponse = app
+        .wrap()
+        .query_wasm_smart(&window, &QueryMsg::Config {})
+        .unwrap();
+    assert_eq!(cfg.max_oracle_age_sec, 12 * 60 * 60);
+}
+
+#[test]
+fn set_max_oracle_age_below_oracle_throttle_rejected() {
+    let Env {
+        mut app, owner, window, ..
+    } = setup();
+
+    let err = app
+        .execute_contract(
+            owner,
+            window,
+            &ExecuteMsg::SetMaxOracleAge {
+                max_oracle_age_sec: MIN_ORACLE_UPDATE_INTERVAL_SECS - 1,
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("at least"),
+        "unexpected: {err}"
+    );
 }

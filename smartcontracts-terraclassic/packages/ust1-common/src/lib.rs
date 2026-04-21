@@ -23,5 +23,11 @@ pub const MAX_DAILY_INCREASE_BPS: u16 = 200;
 /// Minimum seconds between on-chain oracle updates.
 pub const MIN_ORACLE_UPDATE_INTERVAL_SECS: u64 = 4 * 60 * 60;
 
+/// Default maximum age of the oracle rate for swap execution (`ust1-window` staleness guard).
+///
+/// Must be at least [`MIN_ORACLE_UPDATE_INTERVAL_SECS`] so swaps are not impossible between
+/// on-chain oracle updates.
+pub const DEFAULT_MAX_ORACLE_AGE_SECS: u64 = 6 * 60 * 60;
+
 /// Basis points denominator.
 pub const BPS_DENOM: u128 = 10_000;

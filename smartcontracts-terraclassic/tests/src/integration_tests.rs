@@ -2,7 +2,9 @@
 use cosmwasm_std::{to_json_binary, Addr, Empty, Timestamp, Uint128};
 use cw20::{Cw20ExecuteMsg, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
-use ust1_common::{MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE};
+use ust1_common::{
+    DEFAULT_MAX_ORACLE_AGE_SECS, MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE,
+};
 use ust1_oracle::msg as oracle_msg;
 use ust1_window::msg as window_msg;
 
@@ -124,6 +126,7 @@ fn setup_window_env() -> WindowEnv {
                 fee_bps: 50,
                 per_tx_ust1_limit: Uint128::from(500_000_000u128),
                 rolling_24h_ust1_limit: Uint128::from(2_500_000_000u128),
+                max_oracle_age_sec: None,
             },
             &[],
             "window",
@@ -152,6 +155,21 @@ fn setup_window_env() -> WindowEnv {
     }
 }
 
+/// One on-chain `UpdateRate` so `last_update_sec > 0` (required before window swaps).
+fn commit_oracle_rate(app: &mut App, oracle: &Addr, bot: &Addr) {
+    let st: oracle_msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(oracle, &oracle_msg::QueryMsg::State {})
+        .unwrap();
+    app.execute_contract(
+        bot.clone(),
+        oracle.clone(),
+        &oracle_msg::ExecuteMsg::UpdateRate { new_rate: st.rate },
+        &[],
+    )
+    .unwrap();
+}
+
 #[test]
 fn deposit_and_withdraw_round_trip() {
     let WindowEnv {
@@ -161,8 +179,11 @@ fn deposit_and_withdraw_round_trip() {
         vfdusd,
         ust1,
         window,
+        oracle,
         ..
     } = setup_window_env();
+
+    commit_oracle_rate(&mut app, &oracle, &Addr::unchecked("bot"));
 
     app.execute_contract(
         owner.clone(),
@@ -237,6 +258,8 @@ fn set_fee_bps_governance_validation_and_swap_math() {
         window,
         oracle,
     } = setup_window_env();
+
+    commit_oracle_rate(&mut app, &oracle, &Addr::unchecked("bot"));
 
     let stranger = Addr::unchecked("stranger");
     let err = app
@@ -353,6 +376,8 @@ fn effective_swap_query_matches_oracle_and_window_config() {
     assert_eq!(eff.paused, cfg.paused);
     assert_eq!(eff.rolling_window_start_sec, 0);
     assert_eq!(eff.rolling_volume_ust1, Uint128::zero());
+    assert_eq!(eff.max_oracle_age_sec, cfg.max_oracle_age_sec);
+    assert_eq!(eff.max_oracle_age_sec, DEFAULT_MAX_ORACLE_AGE_SECS);
 }
 
 /// **INV-ORACLE-DAILY-001 / INV-SWAP-001**: Combined flow with oracle `UpdateRate` then another deposit.

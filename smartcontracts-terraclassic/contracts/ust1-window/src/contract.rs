@@ -29,6 +29,30 @@ fn query_oracle_state(
     }))
 }
 
+fn validate_max_oracle_age_sec(max_age_sec: u64) -> Result<(), ContractError> {
+    if max_age_sec < ust1_common::MIN_ORACLE_UPDATE_INTERVAL_SECS {
+        return Err(ContractError::MaxOracleAgeTooShort {
+            min_seconds: ust1_common::MIN_ORACLE_UPDATE_INTERVAL_SECS,
+        });
+    }
+    Ok(())
+}
+
+fn ensure_oracle_fresh(
+    env: &Env,
+    oracle_state: &ust1_oracle::msg::StateResponse,
+    max_oracle_age_sec: u64,
+) -> Result<(), ContractError> {
+    if oracle_state.last_update_sec == 0 {
+        return Err(ContractError::OracleStale {});
+    }
+    let now = env.block.time.seconds();
+    if now.saturating_sub(oracle_state.last_update_sec) > max_oracle_age_sec {
+        return Err(ContractError::OracleStale {});
+    }
+    Ok(())
+}
+
 fn ensure_limits(
     env: &Env,
     rolling: &mut RollingVolume,
@@ -61,6 +85,10 @@ pub fn instantiate(
     if msg.fee_bps as u128 > ust1_common::BPS_DENOM {
         return Err(ContractError::Math(ust1_common::MathError::InvalidFeeBps));
     }
+    let max_oracle_age_sec = msg
+        .max_oracle_age_sec
+        .unwrap_or(ust1_common::DEFAULT_MAX_ORACLE_AGE_SECS);
+    validate_max_oracle_age_sec(max_oracle_age_sec)?;
     let cfg = Config {
         governance: deps.api.addr_validate(&msg.governance)?,
         oracle: deps.api.addr_validate(&msg.oracle)?,
@@ -70,6 +98,7 @@ pub fn instantiate(
         per_tx_ust1_limit: msg.per_tx_ust1_limit,
         rolling_24h_ust1_limit: msg.rolling_24h_ust1_limit,
         paused: false,
+        max_oracle_age_sec,
     };
     CONFIG.save(deps.storage, &cfg)?;
     ROLLING.save(
@@ -96,6 +125,9 @@ pub fn execute(
         } => exec_set_limits(deps, info, per_tx_ust1_limit, rolling_24h_ust1_limit),
         ExecuteMsg::SetPaused { paused } => exec_set_paused(deps, info, paused),
         ExecuteMsg::SetFeeBps { fee_bps } => exec_set_fee_bps(deps, info, fee_bps),
+        ExecuteMsg::SetMaxOracleAge {
+            max_oracle_age_sec,
+        } => exec_set_max_oracle_age(deps, info, max_oracle_age_sec),
         ExecuteMsg::ProposeGovernance { address } => exec_propose_gov(deps, info, address),
         ExecuteMsg::AcceptGovernance {} => exec_accept_gov(deps, info),
     }
@@ -135,7 +167,9 @@ fn deposit(
     if !matches!(hook, Cw20HookMsg::Deposit {}) {
         return Err(ContractError::InvalidCw20Hook {});
     }
-    let rate = query_oracle_state(deps.as_ref(), &cfg.oracle)?.rate;
+    let oracle_state = query_oracle_state(deps.as_ref(), &cfg.oracle)?;
+    ensure_oracle_fresh(&env, &oracle_state, cfg.max_oracle_age_sec)?;
+    let rate = oracle_state.rate;
     let ust1_out = ust1_common::math::deposit_vfdusd_to_ust1(amount_vfdusd, rate, cfg.fee_bps)?;
 
     let mut rolling = ROLLING.load(deps.storage)?;
@@ -170,7 +204,9 @@ fn withdraw(
         _ => return Err(ContractError::InvalidCw20Hook {}),
     };
 
-    let rate = query_oracle_state(deps.as_ref(), &cfg.oracle)?.rate;
+    let oracle_state = query_oracle_state(deps.as_ref(), &cfg.oracle)?;
+    ensure_oracle_fresh(&env, &oracle_state, cfg.max_oracle_age_sec)?;
+    let rate = oracle_state.rate;
     let v_out = ust1_common::math::withdraw_gross_ust1_to_vfdusd(gross_ust1, rate, cfg.fee_bps)?;
     if v_out < min_out {
         return Err(ContractError::BelowMinimum {});
@@ -263,6 +299,21 @@ fn exec_set_fee_bps(
         .add_attribute("new_fee_bps", fee_bps.to_string()))
 }
 
+fn exec_set_max_oracle_age(
+    deps: DepsMut,
+    info: MessageInfo,
+    max_oracle_age_sec: u64,
+) -> Result<Response, ContractError> {
+    validate_max_oracle_age_sec(max_oracle_age_sec)?;
+    let mut cfg = CONFIG.load(deps.storage)?;
+    if info.sender != cfg.governance {
+        return Err(ContractError::Unauthorized {});
+    }
+    cfg.max_oracle_age_sec = max_oracle_age_sec;
+    CONFIG.save(deps.storage, &cfg)?;
+    Ok(Response::new().add_attribute("action", "set_max_oracle_age"))
+}
+
 fn exec_propose_gov(
     deps: DepsMut,
     info: MessageInfo,
@@ -309,6 +360,7 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
         per_tx_ust1_limit: c.per_tx_ust1_limit,
         rolling_24h_ust1_limit: c.rolling_24h_ust1_limit,
         paused: c.paused,
+        max_oracle_age_sec: c.max_oracle_age_sec,
     })
 }
 
@@ -324,6 +376,7 @@ fn query_effective_swap(deps: Deps) -> StdResult<EffectiveSwapResponse> {
         rolling_window_start_sec: rolling.window_start_sec,
         rolling_volume_ust1: rolling.volume_ust1,
         oracle,
+        max_oracle_age_sec: cfg.max_oracle_age_sec,
     })
 }
 

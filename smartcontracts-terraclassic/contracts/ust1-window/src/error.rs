@@ -27,6 +27,12 @@ pub enum ContractError {
     #[error("below minimum vFDUSD receive")]
     BelowMinimum {},
 
+    #[error("oracle rate is stale or not yet committed on-chain (run at least one UpdateRate)")]
+    OracleStale {},
+
+    #[error("max oracle age must be at least {min_seconds}s (oracle min update interval)")]
+    MaxOracleAgeTooShort { min_seconds: u64 },
+
     #[error("math error: {0}")]
     Math(#[from] ust1_common::MathError),
 
