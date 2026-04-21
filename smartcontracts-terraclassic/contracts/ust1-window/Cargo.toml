@@ -23,3 +23,4 @@ ust1-oracle = { path = "../ust1-oracle", features = ["library"] }
 
 [dev-dependencies]
 cw-multi-test = { workspace = true }
+cw20-mintable = { workspace = true }

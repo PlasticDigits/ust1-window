@@ -1,8 +1,8 @@
 //! **INV-SWAP-001 / INV-LIMIT-001**: End-to-end deposit and withdraw on mock chain.
-use cosmwasm_std::{to_json_binary, Addr, Empty, Uint128};
+use cosmwasm_std::{to_json_binary, Addr, Empty, Timestamp, Uint128};
 use cw20::{Cw20ExecuteMsg, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
-use ust1_common::RATE_SCALE;
+use ust1_common::{MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE};
 use ust1_oracle::msg as oracle_msg;
 use ust1_window::msg as window_msg;
 
@@ -353,4 +353,170 @@ fn effective_swap_query_matches_oracle_and_window_config() {
     assert_eq!(eff.paused, cfg.paused);
     assert_eq!(eff.rolling_window_start_sec, 0);
     assert_eq!(eff.rolling_volume_ust1, Uint128::zero());
+}
+
+/// **INV-ORACLE-DAILY-001 / INV-SWAP-001**: Combined flow with oracle `UpdateRate` then another deposit.
+#[test]
+fn deposit_after_oracle_rate_bump_within_daily_cap() {
+    let WindowEnv {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        ust1,
+        window,
+        oracle,
+        ..
+    } = setup_window_env();
+
+    let bot = Addr::unchecked("bot");
+    let t0 = 86_400u64 * 50 + 3_600;
+    app.update_block(|b| {
+        b.time = Timestamp::from_seconds(t0);
+        b.height += 1;
+    });
+
+    let initial = app
+        .wrap()
+        .query_wasm_smart::<oracle_msg::StateResponse>(
+            oracle.clone(),
+            &oracle_msg::QueryMsg::State {},
+        )
+        .unwrap()
+        .rate;
+
+    let new_rate = initial
+        .checked_mul(Uint128::from(101u128))
+        .unwrap()
+        .checked_div(Uint128::from(100u128))
+        .unwrap();
+
+    app.execute_contract(
+        bot,
+        oracle.clone(),
+        &oracle_msg::ExecuteMsg::UpdateRate { new_rate },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(20_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let amount_vfdusd = Uint128::from(2_000_000u128);
+    let hook = window_msg::Cw20HookMsg::Deposit {};
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: amount_vfdusd,
+            msg: to_json_binary(&hook).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let rate: oracle_msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(oracle, &oracle_msg::QueryMsg::State {})
+        .unwrap();
+    let expected = ust1_common::math::deposit_vfdusd_to_ust1(amount_vfdusd, rate.rate, 50).unwrap();
+
+    let bal: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            ust1,
+            &cw20::Cw20QueryMsg::Balance {
+                address: user.to_string(),
+            },
+        )
+        .unwrap();
+    assert_eq!(bal.balance, expected);
+}
+
+/// Second `UpdateRate` must respect **INV-ORACLE-THROTTLE-001** (4h min interval on chain).
+#[test]
+fn oracle_second_update_same_day_respects_throttle() {
+    let mut app = App::default();
+    let owner = Addr::unchecked("owner");
+    let bot = Addr::unchecked("bot");
+
+    let oracle_id = app.store_code(oracle_contract());
+    let oracle = app
+        .instantiate_contract(
+            oracle_id,
+            owner.clone(),
+            &oracle_msg::InstantiateMsg {
+                governance: owner.to_string(),
+                oracle_operator: bot.to_string(),
+                initial_rate: Uint128::from(RATE_SCALE),
+            },
+            &[],
+            "oracle",
+            None,
+        )
+        .unwrap();
+
+    let t0 = 86_400u64 * 100;
+    app.update_block(|b| {
+        b.time = Timestamp::from_seconds(t0);
+        b.height += 1;
+    });
+
+    app.execute_contract(
+        bot.clone(),
+        oracle.clone(),
+        &oracle_msg::ExecuteMsg::UpdateRate {
+            new_rate: Uint128::from(RATE_SCALE)
+                .checked_mul(Uint128::from(101u128))
+                .unwrap()
+                .checked_div(Uint128::from(100u128))
+                .unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let err = app
+        .execute_contract(
+            bot.clone(),
+            oracle.clone(),
+            &oracle_msg::ExecuteMsg::UpdateRate {
+                new_rate: Uint128::from(RATE_SCALE)
+                    .checked_mul(Uint128::from(102u128))
+                    .unwrap()
+                    .checked_div(Uint128::from(100u128))
+                    .unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(err.root_cause().to_string().contains("too soon"), "{err}");
+
+    app.update_block(|b| {
+        b.time = Timestamp::from_seconds(t0 + MIN_ORACLE_UPDATE_INTERVAL_SECS);
+        b.height += 1;
+    });
+
+    app.execute_contract(
+        Addr::unchecked("bot"),
+        oracle,
+        &oracle_msg::ExecuteMsg::UpdateRate {
+            new_rate: Uint128::from(RATE_SCALE)
+                .checked_mul(Uint128::from(102u128))
+                .unwrap()
+                .checked_div(Uint128::from(100u128))
+                .unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
 }

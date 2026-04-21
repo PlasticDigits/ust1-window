@@ -5,6 +5,9 @@ pub mod error;
 pub mod msg;
 pub mod state;
 
+#[cfg(test)]
+mod multitest;
+
 #[cfg(not(feature = "library"))]
 mod entry {
     use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};

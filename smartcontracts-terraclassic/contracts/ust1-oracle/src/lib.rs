@@ -10,6 +10,9 @@ pub use msg::{
     QueryMsg as OracleQueryMsg, StateResponse,
 };
 
+#[cfg(test)]
+mod multitest;
+
 #[cfg(not(feature = "library"))]
 mod entry {
     use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
