@@ -33,7 +33,9 @@ def main() -> int:
         print("  export TERRA_LCD_URL=http://localhost:1317")
         print(f"  export TERRA_CHAIN_ID={chain_id}")
         print("  export ORACLE_CONTRACT=<addr>")
-        print("  export BSC_RPC_URLS=https://bsc-dataseed1.binance.org")
+        print(
+            "  export BSC_RPC_URLS=https://bsc-dataseed1.binance.org,https://bsc-dataseed2.binance.org"
+        )
         print("  export VENUS_VTOKEN_ADDRESS=<bsc_vtoken_address>")
         print("  export TERRA_MNEMONIC=<oracle_operator_mnemonic>")
         return 0
