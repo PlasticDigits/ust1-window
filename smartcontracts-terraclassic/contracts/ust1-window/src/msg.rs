@@ -12,6 +12,9 @@ pub struct InstantiateMsg {
     pub fee_bps: u16,
     pub per_tx_ust1_limit: Uint128,
     pub rolling_24h_ust1_limit: Uint128,
+    /// Max oracle staleness for swaps (seconds). If omitted, uses `ust1_common::DEFAULT_MAX_ORACLE_AGE_SECS` (6h).
+    #[serde(default)]
+    pub max_oracle_age_sec: Option<u64>,
 }
 
 #[cw_serde]
@@ -35,6 +38,10 @@ pub enum ExecuteMsg {
     /// Governance-only: update UST1-leg fee (`fee_bps`); same validation as instantiate (`<= 10_000`).
     SetFeeBps {
         fee_bps: u16,
+    },
+    /// Governance-only: max seconds the oracle rate may lag behind block time for swaps.
+    SetMaxOracleAge {
+        max_oracle_age_sec: u64,
     },
     ProposeGovernance {
         address: String,
@@ -62,6 +69,7 @@ pub struct ConfigResponse {
     pub per_tx_ust1_limit: Uint128,
     pub rolling_24h_ust1_limit: Uint128,
     pub paused: bool,
+    pub max_oracle_age_sec: u64,
 }
 
 /// Parameters and oracle view that apply to the next deposit or withdraw (single query for integrators).
@@ -77,6 +85,8 @@ pub struct EffectiveSwapResponse {
     pub rolling_volume_ust1: Uint128,
     /// Oracle `State` from the configured oracle (includes `rate` used for swap math).
     pub oracle: OracleStateResponse,
+    /// Same as config: staleness threshold (seconds) enforced on the next deposit/withdraw.
+    pub max_oracle_age_sec: u64,
 }
 
 #[cw_serde]
