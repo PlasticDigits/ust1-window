@@ -13,7 +13,10 @@ pub use msg::{
 #[cfg(test)]
 mod multitest;
 
+// `crate-type` includes `rlib`; entry points are only referenced by the Wasm host, so the `rlib`
+// build sees them as unused (CosmWasm `#[entry_point]` does not satisfy `dead_code` for that target).
 #[cfg(not(feature = "library"))]
+#[allow(dead_code)]
 mod entry {
     use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
 

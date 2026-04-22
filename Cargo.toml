@@ -32,7 +32,7 @@ schemars = "0.8.15"
 serde = { version = "1.0.188", default-features = false, features = ["derive"] }
 ust1-common = { path = "smartcontracts-terraclassic/packages/ust1-common", version = "0.1.0" }
 ust1-cmm = { path = "smartcontracts-terraclassic/packages/ust1-cmm", version = "0.1.0" }
-ust1-oracle = { path = "smartcontracts-terraclassic/contracts/ust1-oracle", version = "0.1.0", features = [
+ust1-oracle = { path = "smartcontracts-terraclassic/contracts/ust1-oracle", version = "0.1.1", features = [
   "library",
 ] }
 cw20-mintable = { git = "https://github.com/PlasticDigits/cw20-mintable", rev = "73a206b5c39c5bd8f9d3574bda32fc5ae8f52ec8", features = ["library"] }

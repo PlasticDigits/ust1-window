@@ -8,7 +8,9 @@ pub mod state;
 #[cfg(test)]
 mod multitest;
 
+// See `ust1-oracle` `entry` module: `rlib` + Wasm entry points trigger `dead_code` without this.
 #[cfg(not(feature = "library"))]
+#[allow(dead_code)]
 mod entry {
     use cosmwasm_std::{entry_point, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
 
