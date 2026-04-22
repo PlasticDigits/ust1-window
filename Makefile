@@ -21,7 +21,7 @@ wait-healthy:
 	echo "ERROR: timeout"; exit 1
 
 test-contracts:
-	cargo test -p ust1-common -p ust1-oracle -p ust1-window -p ust1-integration-tests
+	cargo test -p ust1-common -p ust1-oracle -p ust1-window -p cmm-native-wrap -p ust1-integration-tests
 
 build-optimized:
 	chmod +x scripts/optimize.sh && ./scripts/optimize.sh

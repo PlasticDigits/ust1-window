@@ -11,5 +11,6 @@ cw20-mintable = { workspace = true }
 ust1-common = { workspace = true }
 ust1-oracle = { path = "../contracts/ust1-oracle", features = ["library"] }
 ust1-window = { path = "../contracts/ust1-window", features = ["library"] }
+cmm-native-wrap = { path = "../contracts/cmm-native-wrap", features = ["library"] }
 serde = { workspace = true }
 proptest = { workspace = true }
