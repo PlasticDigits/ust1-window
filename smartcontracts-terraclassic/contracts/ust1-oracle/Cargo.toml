@@ -2,6 +2,9 @@
 name = "ust1-oracle"
 version.workspace = true
 edition.workspace = true
+description = "On-chain UST1 / vFDUSD rate oracle for Terra Classic (CosmWasm)"
+license.workspace = true
+repository.workspace = true
 
 [lib]
 crate-type = ["cdylib", "rlib"]

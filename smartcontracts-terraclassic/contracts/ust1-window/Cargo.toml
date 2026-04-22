@@ -20,7 +20,7 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 ust1-cmm = { workspace = true }
 ust1-common = { workspace = true }
-ust1-oracle = { path = "../ust1-oracle", features = ["library"] }
+ust1-oracle = { workspace = true }
 
 [dev-dependencies]
 cw-multi-test = { workspace = true }

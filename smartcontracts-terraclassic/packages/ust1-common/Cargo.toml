@@ -3,6 +3,8 @@ name = "ust1-common"
 version.workspace = true
 edition.workspace = true
 description = "Shared constants and pure math for UST1 oracle and window contracts"
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 cosmwasm-std = { workspace = true }

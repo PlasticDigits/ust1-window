@@ -13,6 +13,10 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+# Required for `cargo publish -p <member>`: path deps must also declare a version so the
+# published crate manifest resolves from crates.io (path is stripped on publish).
+license = "MIT OR Apache-2.0"
+repository = "https://gitlab.com/PlasticDigits/ust1-window"
 
 [workspace.dependencies]
 cosmwasm-std = { version = "1.5.11", features = ["staking"] }
@@ -26,8 +30,11 @@ cw-multi-test = "1.2.0"
 thiserror = "1.0.4"
 schemars = "0.8.15"
 serde = { version = "1.0.188", default-features = false, features = ["derive"] }
-ust1-common = { path = "smartcontracts-terraclassic/packages/ust1-common" }
-ust1-cmm = { path = "smartcontracts-terraclassic/packages/ust1-cmm" }
+ust1-common = { path = "smartcontracts-terraclassic/packages/ust1-common", version = "0.1.0" }
+ust1-cmm = { path = "smartcontracts-terraclassic/packages/ust1-cmm", version = "0.1.0" }
+ust1-oracle = { path = "smartcontracts-terraclassic/contracts/ust1-oracle", version = "0.1.0", features = [
+  "library",
+] }
 cw20-mintable = { git = "https://github.com/PlasticDigits/cw20-mintable", rev = "73a206b5c39c5bd8f9d3574bda32fc5ae8f52ec8", features = ["library"] }
 proptest = "1"
 
