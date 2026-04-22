@@ -21,6 +21,8 @@ Monorepo for Terra Classic **UST1** swap tooling against bridged Venus **vFDUSD*
 - **INV-LIMIT-001** — `ust1-window/src/state.rs`, enforced in `contract.rs`
 - **INV-LIMIT-NATIVE-001** — `cmm-native-wrap/src/state.rs` / `limits.rs`, enforced in `wrap.rs` and `unwrap.rs`
 
+Operator checklist, BSC + Terra address registry, and mainnet/testnet deployment notes: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) ([GitLab #15](https://gitlab.com/PlasticDigits/ust1-window/-/issues/15)).
+
 ## Local development
 
 ```bash
@@ -36,9 +38,11 @@ make test-contracts
 
 The `ust1-oracle-service` binary is intentionally **lightweight**: it uses **structured `tracing` logs only** (no Prometheus or in-process metrics server). Every `check_rate_update` and `sign_and_broadcast_execute` outcome is logged at `info` (policy result) or `info`/`warn` (broadcast). If there has been **no successful on-chain broadcast** for longer than **`ORACLE_MAX_SILENCE_SECS`** (default **28800**, i.e. 8 hours), the process emits a **high-visibility `error!` liveness alert** on each poll tick.
 
+**Production-style deployment** (Terra Classic wasm + BSC oracle path + operator checklist + address registry) is documented in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). After exporting env vars, run `make verify-oracle-env` to confirm required keys are present before starting the service.
+
 **Deployment** (e.g. [Render](https://render.com)): the platform should provide an **HTTP health check** and **uptime / failure alerting** on the service URL or process, similar to Render’s built-in health checks and notifications. Whatever host you use must offer **comparable external monitoring** so silent process hangs or repeated crashes are surfaced; the in-process log alert is not a substitute for off-platform paging.
 
-Relevant environment variables: `ORACLE_MAX_SILENCE_SECS`, `POLL_INTERVAL_SECS`, plus the oracle env vars listed under Local development above.
+Relevant environment variables: `ORACLE_MAX_SILENCE_SECS`, `POLL_INTERVAL_SECS`, plus the oracle env vars listed under Local development above and in `docs/DEPLOYMENT.md`.
 
 ## Build optimized Wasm
 

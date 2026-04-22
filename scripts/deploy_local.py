@@ -5,6 +5,9 @@ Deploy orchestration for LocalTerra (ust1-window).
 This script does not encode business rules; it shells out to `terrad` when available.
 Install the Terra Classic CLI and run inside the LocalTerra container or against localhost:26657.
 
+For **mainnet / testnet** checklists, address registry, BSC integration notes, and oracle env
+semantics, see ``docs/DEPLOYMENT.md`` (GitLab issue #15).
+
 Environment:
   CHAIN_ID (default: localterra)
   HOME / keyring (configure per your terrad setup)
@@ -29,6 +32,7 @@ def main() -> int:
         print("\nExample sequence after `cargo build` wasm artifacts:")
         print("  terrad tx wasm store artifacts/ust1_oracle.wasm ...")
         print("  terrad tx wasm instantiate <code_id> '{...}' ...")
+        print("\nFull operator runbook: docs/DEPLOYMENT.md")
         print("\nOracle env for oracle-service (after deploy):")
         print("  export TERRA_LCD_URL=http://localhost:1317")
         print(f"  export TERRA_CHAIN_ID={chain_id}")

@@ -1,4 +1,8 @@
 //! Environment configuration for `ust1-oracle-service`.
+//!
+//! Deployment checklist and env table: `docs/DEPLOYMENT.md` (repo root). Invariants mirrored
+//! off-chain: **INV-ORACLE-THROTTLE-001**, **INV-ORACLE-DAILY-001**, **INV-ORACLE-MONO-001** in
+//! `ust1-common::oracle_policy`.
 
 use alloy::primitives::Address;
 use eyre::{eyre, Result};

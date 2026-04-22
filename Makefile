@@ -1,4 +1,4 @@
-.PHONY: start stop reset wait-healthy test-contracts build-optimized deploy-local install-hooks precommit help
+.PHONY: start stop reset wait-healthy test-contracts build-optimized deploy-local verify-oracle-env install-hooks precommit help
 
 start:
 	docker compose up -d
@@ -29,6 +29,9 @@ build-optimized:
 deploy-local: wait-healthy
 	python3 scripts/deploy_local.py
 
+verify-oracle-env:
+	bash scripts/verify_oracle_operator_env.sh
+
 install-hooks:
 	@command -v pre-commit >/dev/null || (echo "Install pre-commit: pip install pre-commit (or uv/pipx)"; exit 1)
 	pre-commit install
@@ -38,5 +41,6 @@ precommit:
 
 help:
 	@echo "make start | stop | reset | wait-healthy"
-	@echo "make test-contracts | build-optimized | deploy-local"
+	@echo "make test-contracts | build-optimized | deploy-local | verify-oracle-env"
 	@echo "make install-hooks | precommit   (requires: pip install pre-commit)"
+	@echo "Deployment guide: docs/DEPLOYMENT.md"
