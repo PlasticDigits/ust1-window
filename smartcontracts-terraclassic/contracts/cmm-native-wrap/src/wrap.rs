@@ -4,6 +4,7 @@ use cosmwasm_std::{to_json_binary, DepsMut, Env, MessageInfo, Response, Uint128,
 use cw20::Cw20ExecuteMsg;
 
 use crate::error::ContractError;
+use crate::fee_accounting::with_fee_split_attributes;
 use crate::limits::ensure_limits;
 use crate::state::{RollingVolume, CONFIG, ROLLING};
 
@@ -45,9 +46,12 @@ pub fn execute_wrap(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respon
         funds: vec![],
     };
 
-    Ok(Response::new()
-        .add_message(mint)
-        .add_attribute("action", "wrap")
-        .add_attribute("denom", &coin.denom)
-        .add_attribute("wrapped_out", mint_amount))
+    Ok(with_fee_split_attributes(
+        Response::new()
+            .add_message(mint)
+            .add_attribute("action", "wrap")
+            .add_attribute("denom", &coin.denom)
+            .add_attribute("wrapped_out", mint_amount),
+        cfg.fee_bps,
+    ))
 }

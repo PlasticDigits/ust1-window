@@ -3,7 +3,8 @@
 //! # Invariants (cross-linked from tests)
 //!
 //! - **INV-MATH-001**: `RATE_SCALE` fixed-point: raw rate `R` means `R/RATE_SCALE` FDUSD per 1 vFDUSD.
-//! - **INV-MATH-002**: Fee applies to UST1 notional using basis points (`fee_bps`); default 1% with split in [`fee_split`].
+//! - **INV-MATH-002**: Fee applies via basis points (`fee_bps`) using [`math::apply_fee_ust1`]; default 1% with
+//!   accounting split in [`fee_split`] (UST1 window + native wrap contracts).
 //! - **INV-SWAP-002**: Reverse gross UST1 → vFDUSD: see `math` module docs and `inv_swap_002_*` tests.
 
 pub mod error;

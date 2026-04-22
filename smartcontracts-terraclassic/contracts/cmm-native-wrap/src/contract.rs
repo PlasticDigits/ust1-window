@@ -4,6 +4,7 @@ use cosmwasm_std::{to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Resp
 use cw2::set_contract_version;
 
 use crate::error::ContractError;
+use crate::fee_accounting::with_fee_split_attributes;
 use crate::gov::{
     exec_accept_gov, exec_propose_gov, exec_set_fee_bps, exec_set_pair_limits, exec_set_paused,
 };
@@ -45,7 +46,10 @@ pub fn instantiate(
         pairs,
     };
     CONFIG.save(deps.storage, &cfg)?;
-    Ok(Response::new().add_attribute("action", "instantiate"))
+    Ok(with_fee_split_attributes(
+        Response::new().add_attribute("action", "instantiate"),
+        cfg.fee_bps,
+    ))
 }
 
 pub fn execute(
@@ -115,9 +119,13 @@ fn query_effective_wrap(deps: Deps, denom: String) -> StdResult<EffectiveWrapRes
             window_start_sec: 0,
             volume_wrap: cosmwasm_std::Uint128::zero(),
         });
+    let (fee_chain_tax_bps, fee_cmm_protocol_bps) =
+        ust1_common::fee_split::chain_tax_and_cmm_protocol(cfg.fee_bps);
     Ok(EffectiveWrapResponse {
         denom: pair.native_denom.clone(),
         fee_bps: cfg.fee_bps,
+        fee_chain_tax_bps,
+        fee_cmm_protocol_bps,
         paused: cfg.paused,
         per_tx_wrap_limit: pair.per_tx_wrap_limit,
         rolling_24h_wrap_limit: pair.rolling_24h_wrap_limit,

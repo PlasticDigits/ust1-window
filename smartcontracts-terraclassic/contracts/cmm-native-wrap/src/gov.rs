@@ -3,6 +3,7 @@
 use cosmwasm_std::{DepsMut, MessageInfo, Response, Uint128};
 
 use crate::error::ContractError;
+use crate::fee_accounting::with_fee_split_attributes;
 use crate::state::{PendingGovernance, CONFIG, PENDING_GOVERNANCE};
 
 pub fn exec_set_pair_limits(
@@ -56,10 +57,13 @@ pub fn exec_set_fee_bps(
     let old = cfg.fee_bps;
     cfg.fee_bps = fee_bps;
     CONFIG.save(deps.storage, &cfg)?;
-    Ok(Response::new()
-        .add_attribute("action", "set_fee_bps")
-        .add_attribute("old_fee_bps", old.to_string())
-        .add_attribute("new_fee_bps", fee_bps.to_string()))
+    Ok(with_fee_split_attributes(
+        Response::new()
+            .add_attribute("action", "set_fee_bps")
+            .add_attribute("old_fee_bps", old.to_string())
+            .add_attribute("new_fee_bps", fee_bps.to_string()),
+        fee_bps,
+    ))
 }
 
 pub fn exec_propose_gov(

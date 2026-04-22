@@ -6,6 +6,7 @@ use cw_multi_test::{App, ContractWrapper, Executor};
 
 use cmm_native_wrap::msg::{ExecuteMsg, InstantiateMsg, PairInstantiateMsg, QueryMsg};
 use cmm_native_wrap::state::{LUNC_DENOM, USTC_DENOM};
+use ust1_common::DEFAULT_FEE_BPS;
 
 fn wrap_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
     Box::new(
@@ -90,7 +91,7 @@ fn config_and_effective_wrap_query() {
             owner.clone(),
             &InstantiateMsg {
                 governance: owner.to_string(),
-                fee_bps: 0,
+                fee_bps: DEFAULT_FEE_BPS,
                 pairs: vec![
                     PairInstantiateMsg {
                         native_denom: LUNC_DENOM.to_string(),
@@ -129,7 +130,7 @@ fn config_and_effective_wrap_query() {
         .query_wasm_smart(&wrap, &QueryMsg::Config {})
         .unwrap();
     assert_eq!(cfg.pairs.len(), 2);
-    assert_eq!(cfg.fee_bps, 0);
+    assert_eq!(cfg.fee_bps, DEFAULT_FEE_BPS);
 
     let eff: cmm_native_wrap::msg::EffectiveWrapResponse = app
         .wrap()
@@ -141,6 +142,8 @@ fn config_and_effective_wrap_query() {
         )
         .unwrap();
     assert_eq!(eff.wrapped_token, wlunc.to_string());
+    assert_eq!(eff.fee_chain_tax_bps, 50);
+    assert_eq!(eff.fee_cmm_protocol_bps, 50);
 
     app.execute_contract(
         user.clone(),
@@ -159,5 +162,6 @@ fn config_and_effective_wrap_query() {
             },
         )
         .unwrap();
-    assert_eq!(bal.balance, Uint128::from(1_000_000u128));
+    // 1% fee on 1_000_000 → 990_000 wLUNC minted
+    assert_eq!(bal.balance, Uint128::from(990_000u128));
 }

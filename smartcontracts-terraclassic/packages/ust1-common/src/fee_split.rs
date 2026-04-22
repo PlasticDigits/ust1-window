@@ -1,4 +1,8 @@
-//! Fee accounting: total UST1-leg fee split into chain-tax coverage vs CMM protocol (GitLab #17).
+//! Fee accounting: total swap fee (`fee_bps`) split into chain-tax coverage vs CMM protocol (GitLab #17).
+//!
+//! Used for **UST1-leg** amounts in `ust1-window` and for **symmetric** wrap/unwrap fee attribution in
+//! `cmm-native-wrap` (wLUNC / wUSTC). The on-chain debit/credit is still a single `apply_fee_ust1` step;
+//! this split is for **events, queries, and indexers**.
 
 /// Split `fee_total_bps` into (chain_tax_coverage_bps, cmm_protocol_fee_bps).
 ///

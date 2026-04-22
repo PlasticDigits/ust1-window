@@ -6,6 +6,7 @@ use cosmwasm_std::{
 use cw20::{Cw20ExecuteMsg, Cw20ReceiveMsg};
 
 use crate::error::ContractError;
+use crate::fee_accounting::with_fee_split_attributes;
 use crate::limits::ensure_limits;
 use crate::msg::Cw20HookMsg;
 use crate::state::{RollingVolume, CONFIG, ROLLING};
@@ -65,10 +66,13 @@ pub fn receive_cw20(
         amount: vec![coin(native_out.u128(), pair.native_denom.clone())],
     };
 
-    Ok(Response::new()
-        .add_message(burn)
-        .add_message(send)
-        .add_attribute("action", "unwrap")
-        .add_attribute("denom", pair.native_denom.as_str())
-        .add_attribute("native_out", native_out))
+    Ok(with_fee_split_attributes(
+        Response::new()
+            .add_message(burn)
+            .add_message(send)
+            .add_attribute("action", "unwrap")
+            .add_attribute("denom", pair.native_denom.as_str())
+            .add_attribute("native_out", native_out),
+        cfg.fee_bps,
+    ))
 }

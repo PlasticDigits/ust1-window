@@ -4,7 +4,7 @@ use cosmwasm_std::{coin, to_json_binary, Addr, Empty, Timestamp, Uint128};
 use cw20::{Cw20ExecuteMsg, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
 
-use crate::msg::{Cw20HookMsg, ExecuteMsg, InstantiateMsg, PairInstantiateMsg};
+use crate::msg::{Cw20HookMsg, ExecuteMsg, InstantiateMsg, PairInstantiateMsg, QueryMsg};
 use crate::state::{LUNC_DENOM, USTC_DENOM};
 
 fn wrap_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
@@ -179,6 +179,55 @@ fn wrap_lunc_mints_wlunc_after_fee() {
         .unwrap();
     // 50 bps on 1_000_000 → 995_000
     assert_eq!(bal.balance, Uint128::from(995_000u128));
+}
+
+#[test]
+fn effective_wrap_and_wrap_events_expose_fee_split() {
+    let Env {
+        mut app,
+        user,
+        wrap,
+        ..
+    } = setup();
+
+    let eff: crate::msg::EffectiveWrapResponse = app
+        .wrap()
+        .query_wasm_smart(
+            &wrap,
+            &QueryMsg::EffectiveWrap {
+                denom: LUNC_DENOM.to_string(),
+            },
+        )
+        .unwrap();
+    assert_eq!(eff.fee_bps, 50);
+    assert_eq!(eff.fee_chain_tax_bps, 25);
+    assert_eq!(eff.fee_cmm_protocol_bps, 25);
+
+    let res = app
+        .execute_contract(
+            user,
+            wrap,
+            &ExecuteMsg::Wrap {},
+            &[coin(1_000_000u128, LUNC_DENOM)],
+        )
+        .unwrap();
+
+    let wasm = res
+        .events
+        .iter()
+        .find(|e| e.ty == "wasm")
+        .expect("wasm event");
+    let get = |key: &str| -> String {
+        wasm.attributes
+            .iter()
+            .find(|a| a.key == key)
+            .unwrap_or_else(|| panic!("missing attr {key}"))
+            .value
+            .clone()
+    };
+    assert_eq!(get("fee_total_bps"), "50");
+    assert_eq!(get("fee_chain_tax_bps"), "25");
+    assert_eq!(get("fee_cmm_protocol_bps"), "25");
 }
 
 #[test]

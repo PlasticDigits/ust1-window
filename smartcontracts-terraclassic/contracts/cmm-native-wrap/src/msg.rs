@@ -77,6 +77,10 @@ pub struct ConfigResponse {
 pub struct EffectiveWrapResponse {
     pub denom: String,
     pub fee_bps: u16,
+    /// Basis points of `fee_bps` attributed to chain tax coverage (floor half); see `ust1_common::fee_split`.
+    pub fee_chain_tax_bps: u16,
+    /// Remainder of `fee_bps` attributed to CMM protocol fee.
+    pub fee_cmm_protocol_bps: u16,
     pub paused: bool,
     pub per_tx_wrap_limit: Uint128,
     pub rolling_24h_wrap_limit: Uint128,

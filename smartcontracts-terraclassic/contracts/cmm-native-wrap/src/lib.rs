@@ -7,9 +7,16 @@
 //!
 //! There is **no oracle**. CW20 assets other than the two configured wrapped tokens are **out of scope**
 //! (see GitLab issue #16).
+//!
+//! # Fee economics (GitLab #17)
+//!
+//! Governance `fee_bps` applies symmetrically on wrap (native in → mint) and unwrap (burn → native out).
+//! **Accounting only:** execution uses a single `apply_fee_ust1` step; wrap / unwrap / `SetFeeBps` /
+//! [`crate::msg::QueryMsg::EffectiveWrap`] expose the **50/50-style** split via [`crate::fee_accounting`].
 
 pub mod contract;
 pub mod error;
+pub mod fee_accounting;
 pub mod gov;
 pub mod limits;
 pub mod msg;
