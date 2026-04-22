@@ -1,7 +1,7 @@
 //! cw-multi-test coverage for **INV-LIMIT-001**, **INV-SWAP-001**, pause/ACL, and failure paths.
 
 use cosmwasm_std::{to_json_binary, Addr, Empty, Timestamp, Uint128};
-use cw20::{Cw20ExecuteMsg, MinterResponse};
+use cw20::{Cw20ExecuteMsg, Expiration, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
 
 use crate::msg::{ConfigResponse, Cw20HookMsg, ExecuteMsg, InstantiateMsg, QueryMsg};
@@ -41,16 +41,22 @@ struct Env {
     app: App,
     owner: Addr,
     user: Addr,
+    _treasury: Addr,
     vfdusd: Addr,
     ust1: Addr,
     window: Addr,
 }
 
 fn setup() -> Env {
+    setup_with_treasury_allowance(true)
+}
+
+fn setup_with_treasury_allowance(grant_allowance: bool) -> Env {
     let mut app = App::default();
     let owner = Addr::unchecked("owner");
     let bot = Addr::unchecked("bot");
     let user = Addr::unchecked("user");
+    let treasury = Addr::unchecked("treasury");
 
     let oracle_id = app.store_code(oracle_contract());
     let window_id = app.store_code(window_contract());
@@ -121,8 +127,9 @@ fn setup() -> Env {
                 governance: owner.to_string(),
                 oracle: oracle.to_string(),
                 vfdusd_token: vfdusd.to_string(),
+                cmm_treasury: Some(treasury.to_string()),
                 ust1_token: ust1.to_string(),
-                fee_bps: 50,
+                fee_bps: 100,
                 per_tx_ust1_limit: Uint128::from(500_000_000u128),
                 rolling_24h_ust1_limit: Uint128::from(2_500_000_000u128),
                 max_oracle_age_sec: None,
@@ -155,10 +162,25 @@ fn setup() -> Env {
     )
     .unwrap();
 
+    if grant_allowance {
+        app.execute_contract(
+            treasury.clone(),
+            vfdusd.clone(),
+            &cw20_mintable::msg::ExecuteMsg::IncreaseAllowance {
+                spender: window.to_string(),
+                amount: Uint128::MAX,
+                expires: Some(Expiration::Never {}),
+            },
+            &[],
+        )
+        .unwrap();
+    }
+
     Env {
         app,
         owner,
         user,
+        _treasury: treasury,
         vfdusd,
         ust1,
         window,
@@ -620,6 +642,75 @@ fn set_max_oracle_age_below_oracle_throttle_rejected() {
         .unwrap_err();
     assert!(
         err.root_cause().to_string().contains("at least"),
+        "unexpected: {err}"
+    );
+}
+
+#[test]
+fn withdraw_rejected_without_treasury_allowance() {
+    let Env {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        ust1,
+        window,
+        ..
+    } = setup_with_treasury_allowance(false);
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(10_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: Uint128::from(1_000_000u128),
+            msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let bal: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            ust1.clone(),
+            &cw20::Cw20QueryMsg::Balance {
+                address: user.to_string(),
+            },
+        )
+        .unwrap();
+
+    let err = app
+        .execute_contract(
+            user,
+            ust1,
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: bal.balance,
+                msg: to_json_binary(&Cw20HookMsg::Withdraw {
+                    min_vfdusd_out: Uint128::zero(),
+                })
+                .unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause()
+            .to_string()
+            .to_lowercase()
+            .contains("allowance"),
         "unexpected: {err}"
     );
 }

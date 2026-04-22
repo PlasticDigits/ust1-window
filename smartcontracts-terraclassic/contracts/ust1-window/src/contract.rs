@@ -29,6 +29,36 @@ fn query_oracle_state(
     }))
 }
 
+fn query_cw20_balance(
+    deps: Deps,
+    token: &cosmwasm_std::Addr,
+    holder: &cosmwasm_std::Addr,
+) -> StdResult<Uint128> {
+    let bal: cw20::BalanceResponse = deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
+        contract_addr: token.to_string(),
+        msg: to_json_binary(&cw20::Cw20QueryMsg::Balance {
+            address: holder.to_string(),
+        })?,
+    }))?;
+    Ok(bal.balance)
+}
+
+fn query_cw20_allowance(
+    deps: Deps,
+    token: &cosmwasm_std::Addr,
+    owner: &cosmwasm_std::Addr,
+    spender: &cosmwasm_std::Addr,
+) -> StdResult<Uint128> {
+    let a: cw20::AllowanceResponse = deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
+        contract_addr: token.to_string(),
+        msg: to_json_binary(&cw20::Cw20QueryMsg::Allowance {
+            owner: owner.to_string(),
+            spender: spender.to_string(),
+        })?,
+    }))?;
+    Ok(a.allowance)
+}
+
 fn validate_max_oracle_age_sec(max_age_sec: u64) -> Result<(), ContractError> {
     if max_age_sec < ust1_common::MIN_ORACLE_UPDATE_INTERVAL_SECS {
         return Err(ContractError::MaxOracleAgeTooShort {
@@ -89,10 +119,17 @@ pub fn instantiate(
         .max_oracle_age_sec
         .unwrap_or(ust1_common::DEFAULT_MAX_ORACLE_AGE_SECS);
     validate_max_oracle_age_sec(max_oracle_age_sec)?;
+    let cmm_treasury_raw = msg
+        .cmm_treasury
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(ust1_cmm::CMM_TREASURY_MAINNET);
     let cfg = Config {
         governance: deps.api.addr_validate(&msg.governance)?,
         oracle: deps.api.addr_validate(&msg.oracle)?,
         vfdusd_token: deps.api.addr_validate(&msg.vfdusd_token)?,
+        cmm_treasury: deps.api.addr_validate(cmm_treasury_raw)?,
         ust1_token: deps.api.addr_validate(&msg.ust1_token)?,
         fee_bps: msg.fee_bps,
         per_tx_ust1_limit: msg.per_tx_ust1_limit,
@@ -185,10 +222,27 @@ fn deposit(
         funds: vec![],
     };
 
+    let forward_vfdusd = WasmMsg::Execute {
+        contract_addr: cfg.vfdusd_token.to_string(),
+        msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
+            recipient: cfg.cmm_treasury.to_string(),
+            amount: amount_vfdusd,
+        })?,
+        funds: vec![],
+    };
+
+    let (fee_chain_tax_bps, fee_cmm_protocol_bps) =
+        ust1_common::fee_split::chain_tax_and_cmm_protocol(cfg.fee_bps);
+
     Ok(Response::new()
         .add_message(mint)
+        .add_message(forward_vfdusd)
         .add_attribute("action", "deposit")
-        .add_attribute("ust1_out", ust1_out))
+        .add_attribute("ust1_out", ust1_out)
+        .add_attribute("fee_total_bps", cfg.fee_bps.to_string())
+        .add_attribute("fee_chain_tax_bps", fee_chain_tax_bps.to_string())
+        .add_attribute("fee_cmm_protocol_bps", fee_cmm_protocol_bps.to_string())
+        .add_attribute("vfdusd_to_treasury", amount_vfdusd))
 }
 
 fn withdraw(
@@ -212,14 +266,18 @@ fn withdraw(
         return Err(ContractError::BelowMinimum {});
     }
 
-    let bal: cw20::BalanceResponse = deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
-        contract_addr: cfg.vfdusd_token.to_string(),
-        msg: to_json_binary(&cw20::Cw20QueryMsg::Balance {
-            address: env.contract.address.to_string(),
-        })?,
-    }))?;
-    if bal.balance < v_out {
+    let treasury_bal = query_cw20_balance(deps.as_ref(), &cfg.vfdusd_token, &cfg.cmm_treasury)?;
+    if treasury_bal < v_out {
         return Err(ContractError::InsufficientVfdusd {});
+    }
+    let allowance = query_cw20_allowance(
+        deps.as_ref(),
+        &cfg.vfdusd_token,
+        &cfg.cmm_treasury,
+        &env.contract.address,
+    )?;
+    if allowance < v_out {
+        return Err(ContractError::InsufficientTreasuryAllowance {});
     }
 
     let mut rolling = ROLLING.load(deps.storage)?;
@@ -234,18 +292,25 @@ fn withdraw(
 
     let send_v = WasmMsg::Execute {
         contract_addr: cfg.vfdusd_token.to_string(),
-        msg: to_json_binary(&Cw20ExecuteMsg::Transfer {
+        msg: to_json_binary(&Cw20ExecuteMsg::TransferFrom {
+            owner: cfg.cmm_treasury.to_string(),
             recipient: user.to_string(),
             amount: v_out,
         })?,
         funds: vec![],
     };
 
+    let (fee_chain_tax_bps, fee_cmm_protocol_bps) =
+        ust1_common::fee_split::chain_tax_and_cmm_protocol(cfg.fee_bps);
+
     Ok(Response::new()
         .add_message(burn)
         .add_message(send_v)
         .add_attribute("action", "withdraw")
-        .add_attribute("vfdusd_out", v_out))
+        .add_attribute("vfdusd_out", v_out)
+        .add_attribute("fee_total_bps", cfg.fee_bps.to_string())
+        .add_attribute("fee_chain_tax_bps", fee_chain_tax_bps.to_string())
+        .add_attribute("fee_cmm_protocol_bps", fee_cmm_protocol_bps.to_string()))
 }
 
 fn exec_set_limits(
@@ -293,10 +358,14 @@ fn exec_set_fee_bps(
     let old_fee_bps = cfg.fee_bps;
     cfg.fee_bps = fee_bps;
     CONFIG.save(deps.storage, &cfg)?;
+    let (fee_chain_tax_bps, fee_cmm_protocol_bps) =
+        ust1_common::fee_split::chain_tax_and_cmm_protocol(fee_bps);
     Ok(Response::new()
         .add_attribute("action", "set_fee_bps")
         .add_attribute("old_fee_bps", old_fee_bps.to_string())
-        .add_attribute("new_fee_bps", fee_bps.to_string()))
+        .add_attribute("new_fee_bps", fee_bps.to_string())
+        .add_attribute("fee_chain_tax_bps", fee_chain_tax_bps.to_string())
+        .add_attribute("fee_cmm_protocol_bps", fee_cmm_protocol_bps.to_string()))
 }
 
 fn exec_set_max_oracle_age(
@@ -355,6 +424,7 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
         governance: c.governance.to_string(),
         oracle: c.oracle.to_string(),
         vfdusd_token: c.vfdusd_token.to_string(),
+        cmm_treasury: c.cmm_treasury.to_string(),
         ust1_token: c.ust1_token.to_string(),
         fee_bps: c.fee_bps,
         per_tx_ust1_limit: c.per_tx_ust1_limit,
@@ -368,8 +438,12 @@ fn query_effective_swap(deps: Deps) -> StdResult<EffectiveSwapResponse> {
     let cfg = CONFIG.load(deps.storage)?;
     let rolling = ROLLING.load(deps.storage)?;
     let oracle = query_oracle_state(deps, &cfg.oracle)?;
+    let (fee_chain_tax_bps, fee_cmm_protocol_bps) =
+        ust1_common::fee_split::chain_tax_and_cmm_protocol(cfg.fee_bps);
     Ok(EffectiveSwapResponse {
         fee_bps: cfg.fee_bps,
+        fee_chain_tax_bps,
+        fee_cmm_protocol_bps,
         per_tx_ust1_limit: cfg.per_tx_ust1_limit,
         rolling_24h_ust1_limit: cfg.rolling_24h_ust1_limit,
         paused: cfg.paused,

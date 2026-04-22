@@ -21,8 +21,11 @@ pub enum ContractError {
     #[error("UST1 rolling 24h limit exceeded")]
     RollingLimit {},
 
-    #[error("vFDUSD balance too low for withdrawal")]
+    #[error("vFDUSD balance too low on CMM treasury for withdrawal")]
     InsufficientVfdusd {},
+
+    #[error("CMM treasury vFDUSD allowance for the window is too low (call IncreaseAllowance on vFDUSD)")]
+    InsufficientTreasuryAllowance {},
 
     #[error("below minimum vFDUSD receive")]
     BelowMinimum {},

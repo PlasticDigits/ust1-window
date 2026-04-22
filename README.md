@@ -8,7 +8,7 @@ Monorepo for Terra Classic **UST1** swap tooling against bridged Venus **vFDUSD*
 |------|------|
 | `smartcontracts-terraclassic/packages/ust1-common` | Fixed-point math, oracle policy (`INV-*` in source), shared with contracts + service |
 | `smartcontracts-terraclassic/contracts/ust1-oracle` | On-chain rate `R`, 4h min interval, UTC daily +2% cap, monotonic |
-| `smartcontracts-terraclassic/contracts/ust1-window` | cw20 receive: vFDUSD→mint UST1, UST1→burn + vFDUSD; governance-set fee on UST1 leg (`fee_bps`, default 0.5%); governance limits |
+| `smartcontracts-terraclassic/contracts/ust1-window` | cw20 receive: vFDUSD→mint UST1 + forward vFDUSD to CMM treasury, UST1→burn + `TransferFrom` vFDUSD from treasury; governance-set fee on UST1 leg (`fee_bps`, default 1.0% with 50/50 chain-tax vs CMM accounting); treasury must `IncreaseAllowance` for the window on vFDUSD |
 | `oracle-service` | Polls BSC `exchangeRateStored`, applies same policy as chain, broadcasts `UpdateRate` |
 | `scripts/` | Python 3 deploy helpers (no business logic) |
 
