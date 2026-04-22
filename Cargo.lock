@@ -1162,6 +1162,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "cmm-native-wrap"
+version = "0.1.0"
+dependencies = [
+ "cosmwasm-schema",
+ "cosmwasm-std",
+ "cw-multi-test",
+ "cw-storage-plus",
+ "cw2",
+ "cw20",
+ "cw20-mintable",
+ "schemars",
+ "serde",
+ "thiserror 1.0.69",
+ "ust1-common",
+]
+
+[[package]]
 name = "const-hex"
 version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4499,6 +4516,7 @@ dependencies = [
 name = "ust1-integration-tests"
 version = "0.1.0"
 dependencies = [
+ "cmm-native-wrap",
  "cosmwasm-std",
  "cw-multi-test",
  "cw20",
