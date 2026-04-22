@@ -4,6 +4,7 @@
 //!
 //! - **INV-MATH-001**: `RATE_SCALE` fixed-point: raw rate `R` means `R/RATE_SCALE` FDUSD per 1 vFDUSD.
 //! - **INV-MATH-002**: Fee applies to UST1 notional using basis points (`FEE_BPS`).
+//! - **INV-SWAP-002**: Reverse gross UST1 → vFDUSD: see `math` module docs and `inv_swap_002_*` tests.
 
 pub mod error;
 pub mod math;

@@ -3,7 +3,10 @@
 //! # Invariants
 //!
 //! - **INV-SWAP-001** (forward): vFDUSD `x` → UST1 `floor(x * R / RATE_SCALE * (BPS_DENOM - fee_bps) / BPS_DENOM)`.
-//! - **INV-SWAP-002** (reverse): UST1 `u` (gross) → vFDUSD `floor(u * (BPS_DENOM - fee_bps) / BPS_DENOM * RATE_SCALE / R)`.
+//! - **INV-SWAP-002** (reverse): gross UST1 `u` → vFDUSD out is the chained integer quotient
+//!   `u * (BPS_DENOM - fee_bps) / BPS_DENOM * RATE_SCALE / R` (left-associative `/`, i.e. fee floor
+//!   then rate division). Implemented as [`withdraw_ust1_after_fee`] then [`ust1_after_fee_to_vfdusd`];
+//!   the public entry point is [`withdraw_gross_ust1_to_vfdusd`].
 
 use cosmwasm_std::{Uint128, Uint256};
 
@@ -96,6 +99,52 @@ mod tests {
         let x = Uint128::from(10_000_000u128);
         let out = deposit_vfdusd_to_ust1(x, rate, 50).unwrap();
         assert!(out < x);
+    }
+
+    /// **INV-SWAP-002** reverse path: gross UST1 → vFDUSD matches known integer vectors.
+    ///
+    /// Each expected output is the chained floor semantics from the module docs (fee on UST1, then
+    /// `RATE_SCALE / R`), asserted via [`withdraw_gross_ust1_to_vfdusd`]. Covers zero fee, typical
+    /// fee, dust-after-fee, max fee (100%), and non–1:1 rates.
+    #[test]
+    fn inv_swap_002_reverse_fee_applies_vectors() {
+        let r_one = Uint128::from(RATE_SCALE);
+        let r_double = Uint128::from(RATE_SCALE * 2);
+        let r_triple = Uint128::from(RATE_SCALE * 3);
+
+        let cases: &[((u128, u16, Uint128), u128)] = &[
+            ((10_000_000, 0, r_one), 10_000_000),
+            ((10_000_000, 50, r_one), 9_950_000),
+            ((1, 0, r_one), 1),
+            ((9, 9999, r_one), 0),
+            ((1_000_000, 10_000, r_one), 0),
+            ((2_000_000, 0, r_double), 1_000_000),
+            ((100, 0, r_triple), 33),
+        ];
+
+        for &((gross, fee_bps, rate), expected_v) in cases {
+            let out = withdraw_gross_ust1_to_vfdusd(Uint128::from(gross), rate, fee_bps).unwrap();
+            assert_eq!(
+                out,
+                Uint128::from(expected_v),
+                "INV-SWAP-002: gross={gross} fee_bps={fee_bps} rate={rate:?}"
+            );
+        }
+    }
+
+    /// **INV-SWAP-002** conversion leg only: after-fee UST1 → vFDUSD (no fee term).
+    #[test]
+    fn inv_swap_002_after_fee_to_vfdusd_vectors() {
+        let r_one = Uint128::from(RATE_SCALE);
+        let cases: &[((u128, Uint128), u128)] = &[
+            ((9_950_000, r_one), 9_950_000),
+            ((1, r_one), 1),
+            ((100, Uint128::from(RATE_SCALE * 3)), 33),
+        ];
+        for &((after_fee, rate), expected_v) in cases {
+            let out = ust1_after_fee_to_vfdusd(Uint128::from(after_fee), rate).unwrap();
+            assert_eq!(out, Uint128::from(expected_v));
+        }
     }
 
     proptest! {

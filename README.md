@@ -14,7 +14,7 @@ Monorepo for Terra Classic **UST1** swap tooling against bridged Venus **vFDUSD*
 
 ## Invariants (index)
 
-- **INV-MATH-001 / INV-SWAP-001 / INV-SWAP-002** — `ust1-common/src/math.rs`
+- **INV-MATH-001 / INV-SWAP-001 / INV-SWAP-002** — `ust1-common/src/math.rs` (reverse path: `inv_swap_002_*` vector tests lock the fee-then-rate floor semantics)
 - **INV-ORACLE-THROTTLE-001 / INV-ORACLE-DAILY-001 / INV-ORACLE-MONO-001** — `ust1-common/src/oracle_policy.rs` + `ust1-oracle`
 - **INV-LIMIT-001** — `ust1-window/src/state.rs`, enforced in `contract.rs`
 
