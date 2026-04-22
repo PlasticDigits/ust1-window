@@ -8,6 +8,9 @@ pub struct InstantiateMsg {
     pub governance: String,
     pub oracle: String,
     pub vfdusd_token: String,
+    /// CMM treasury (`terra1…`). If omitted, uses [`ust1_cmm::CMM_TREASURY_MAINNET`].
+    #[serde(default)]
+    pub cmm_treasury: Option<String>,
     pub ust1_token: String,
     pub fee_bps: u16,
     pub per_tx_ust1_limit: Uint128,
@@ -64,6 +67,7 @@ pub struct ConfigResponse {
     pub governance: String,
     pub oracle: String,
     pub vfdusd_token: String,
+    pub cmm_treasury: String,
     pub ust1_token: String,
     pub fee_bps: u16,
     pub per_tx_ust1_limit: Uint128,
@@ -76,6 +80,10 @@ pub struct ConfigResponse {
 #[cw_serde]
 pub struct EffectiveSwapResponse {
     pub fee_bps: u16,
+    /// Basis points of `fee_bps` attributed to chain tax coverage (floor half).
+    pub fee_chain_tax_bps: u16,
+    /// Remainder of `fee_bps` attributed to CMM protocol fee.
+    pub fee_cmm_protocol_bps: u16,
     pub per_tx_ust1_limit: Uint128,
     pub rolling_24h_ust1_limit: Uint128,
     pub paused: bool,

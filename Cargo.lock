@@ -4483,6 +4483,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ust1-cmm"
+version = "0.1.0"
+
+[[package]]
 name = "ust1-common"
 version = "0.1.0"
 dependencies = [
@@ -4559,6 +4563,7 @@ dependencies = [
  "schemars",
  "serde",
  "thiserror 1.0.69",
+ "ust1-cmm",
  "ust1-common",
  "ust1-oracle",
 ]

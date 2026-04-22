@@ -17,6 +17,8 @@ pub struct Config {
     pub governance: Addr,
     pub oracle: Addr,
     pub vfdusd_token: Addr,
+    /// Holds vFDUSD inventory; deposits forward here; withdraws use `TransferFrom` (treasury must allow the window).
+    pub cmm_treasury: Addr,
     pub ust1_token: Addr,
     /// UST1-leg swap fee in basis points; updatable via governance (`SetFeeBps`).
     pub fee_bps: u16,

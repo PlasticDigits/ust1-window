@@ -1,6 +1,6 @@
 //! **INV-SWAP-001 / INV-LIMIT-001**: End-to-end deposit and withdraw on mock chain.
 use cosmwasm_std::{to_json_binary, Addr, Empty, Timestamp, Uint128};
-use cw20::{Cw20ExecuteMsg, MinterResponse};
+use cw20::{Cw20ExecuteMsg, Expiration, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
 use ust1_common::{DEFAULT_MAX_ORACLE_AGE_SECS, MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE};
 use ust1_oracle::msg as oracle_msg;
@@ -39,6 +39,7 @@ struct WindowEnv {
     app: App,
     owner: Addr,
     user: Addr,
+    _treasury: Addr,
     oracle: Addr,
     vfdusd: Addr,
     ust1: Addr,
@@ -50,6 +51,7 @@ fn setup_window_env() -> WindowEnv {
     let owner = Addr::unchecked("owner");
     let bot = Addr::unchecked("bot");
     let user = Addr::unchecked("user");
+    let treasury = Addr::unchecked("treasury");
 
     let oracle_id = app.store_code(oracle_contract());
     let window_id = app.store_code(window_contract());
@@ -120,8 +122,9 @@ fn setup_window_env() -> WindowEnv {
                 governance: owner.to_string(),
                 oracle: oracle.to_string(),
                 vfdusd_token: vfdusd.to_string(),
+                cmm_treasury: Some(treasury.to_string()),
                 ust1_token: ust1.to_string(),
-                fee_bps: 50,
+                fee_bps: 100,
                 per_tx_ust1_limit: Uint128::from(500_000_000u128),
                 rolling_24h_ust1_limit: Uint128::from(2_500_000_000u128),
                 max_oracle_age_sec: None,
@@ -142,10 +145,23 @@ fn setup_window_env() -> WindowEnv {
     )
     .unwrap();
 
+    app.execute_contract(
+        treasury.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::IncreaseAllowance {
+            spender: window.to_string(),
+            amount: Uint128::MAX,
+            expires: Some(Expiration::Never {}),
+        },
+        &[],
+    )
+    .unwrap();
+
     WindowEnv {
         app,
         owner,
         user,
+        _treasury: treasury,
         oracle,
         vfdusd,
         ust1,
@@ -255,6 +271,7 @@ fn set_fee_bps_governance_validation_and_swap_math() {
         ust1,
         window,
         oracle,
+        ..
     } = setup_window_env();
 
     commit_oracle_rate(&mut app, &oracle, &Addr::unchecked("bot"));
@@ -369,6 +386,8 @@ fn effective_swap_query_matches_oracle_and_window_config() {
 
     assert_eq!(eff.oracle, direct_oracle);
     assert_eq!(eff.fee_bps, cfg.fee_bps);
+    assert_eq!(eff.fee_chain_tax_bps, 50);
+    assert_eq!(eff.fee_cmm_protocol_bps, 50);
     assert_eq!(eff.per_tx_ust1_limit, cfg.per_tx_ust1_limit);
     assert_eq!(eff.rolling_24h_ust1_limit, cfg.rolling_24h_ust1_limit);
     assert_eq!(eff.paused, cfg.paused);
@@ -451,7 +470,8 @@ fn deposit_after_oracle_rate_bump_within_daily_cap() {
         .wrap()
         .query_wasm_smart(oracle, &oracle_msg::QueryMsg::State {})
         .unwrap();
-    let expected = ust1_common::math::deposit_vfdusd_to_ust1(amount_vfdusd, rate.rate, 50).unwrap();
+    let expected =
+        ust1_common::math::deposit_vfdusd_to_ust1(amount_vfdusd, rate.rate, 100).unwrap();
 
     let bal: cw20::BalanceResponse = app
         .wrap()
