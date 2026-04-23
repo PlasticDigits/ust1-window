@@ -108,7 +108,7 @@ terrad tx wasm store artifacts/ust1_window.wasm --from deployer --chain-id colum
 }
 ```
 
-**Instantiate window** (illustrative):
+**Instantiate window** (illustrative): `per_tx_ust1_limit` and `rolling_24h_ust1_limit` are **raw UST1 amounts in the token's smallest unit** (UST1 uses **6 decimals** in our tests; divide by `1000000` for whole UST1). Example values match `smartcontracts-terraclassic/tests`: **500** UST1 per transaction, **2,500** UST1 rolling 24h.
 
 ```json
 {
@@ -118,8 +118,8 @@ terrad tx wasm store artifacts/ust1_window.wasm --from deployer --chain-id colum
   "cmm_treasury": null,
   "ust1_token": "terra1…",
   "fee_bps": 100,
-  "per_tx_ust1_limit": "…",
-  "rolling_24h_ust1_limit": "…",
+  "per_tx_ust1_limit": "500000000",
+  "rolling_24h_ust1_limit": "2500000000",
   "max_oracle_age_sec": null
 }
 ```
