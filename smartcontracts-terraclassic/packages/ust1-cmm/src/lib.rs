@@ -1,7 +1,7 @@
 //! Canonical CMM protocol constants shared across CMM contracts.
 //!
-//! This crate is a workspace stub until [`ust1-cmm`](https://gitlab.com/plasticdigits/ust1-cmm)
-//! is available as a version-pinned Git dependency.
+//! This crate is also published as a standalone repository:
+//! <https://gitlab.com/PlasticDigits/ust1-cmm> (consume via Git dependency there when available).
 
 /// Mainnet CMM treasury (vFDUSD custody for UST1 swaps). GitLab issue #17.
 pub const CMM_TREASURY_MAINNET: &str =

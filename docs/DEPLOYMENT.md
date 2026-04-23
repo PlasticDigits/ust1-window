@@ -78,7 +78,7 @@ Copy this block into your internal runbook and fill per environment.
 
 | Contract / role | Mainnet (`columbus-5`) | Testnet | Code ID | Contract address | Notes |
 |-----------------|------------------------|---------|---------|------------------|--------|
-| CMM treasury (vFDUSD custody) | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` ([`ust1-cmm`](../smartcontracts-terraclassic/packages/ust1-cmm/src/lib.rs)) | | | | Used as default `cmm_treasury` in `ust1-window` if not overridden. |
+| CMM treasury (vFDUSD custody) | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` ([`ust1-cmm` source](https://gitlab.com/PlasticDigits/ust1-window/-/blob/main/smartcontracts-terraclassic/packages/ust1-cmm/src/lib.rs)) | | | | Used as default `cmm_treasury` in `ust1-window` if not overridden. |
 | vFDUSD cw20 | | | | | Bridged asset. |
 | UST1 cw20 | | | | | Mintable per protocol. |
 | `ust1-oracle` | | | | | `oracle_operator` must sign `UpdateRate`. |

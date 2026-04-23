@@ -2,7 +2,7 @@
 name = "ust1-cmm"
 version = "0.1.0"
 edition = "2021"
-description = "CMM protocol constants (local stub; replace with GitLab ust1-cmm when published)."
+description = "CMM protocol constants shared across CMM contracts."
 license = "MIT OR Apache-2.0"
 repository = "https://gitlab.com/PlasticDigits/ust1-window"
 

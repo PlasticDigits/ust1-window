@@ -4502,6 +4502,7 @@ dependencies = [
 [[package]]
 name = "ust1-cmm"
 version = "0.1.0"
+source = "git+https://gitlab.com/PlasticDigits/ust1-window.git?rev=9623780189ba433122f43657f712a3492cf71341#9623780189ba433122f43657f712a3492cf71341"
 
 [[package]]
 name = "ust1-common"

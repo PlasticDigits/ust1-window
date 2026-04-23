@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-  "smartcontracts-terraclassic/packages/ust1-cmm",
   "smartcontracts-terraclassic/packages/ust1-common",
   "smartcontracts-terraclassic/contracts/ust1-oracle",
   "smartcontracts-terraclassic/contracts/ust1-window",
@@ -31,7 +30,7 @@ thiserror = "1.0.4"
 schemars = "0.8.15"
 serde = { version = "1.0.188", default-features = false, features = ["derive"] }
 ust1-common = { path = "smartcontracts-terraclassic/packages/ust1-common", version = "0.1.0" }
-ust1-cmm = { path = "smartcontracts-terraclassic/packages/ust1-cmm", version = "0.1.0" }
+ust1-cmm = { git = "https://gitlab.com/PlasticDigits/ust1-window.git", rev = "9623780189ba433122f43657f712a3492cf71341" }
 ust1-oracle = { path = "smartcontracts-terraclassic/contracts/ust1-oracle", version = "0.1.1", features = [
   "library",
 ] }
