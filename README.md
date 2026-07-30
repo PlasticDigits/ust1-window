@@ -8,9 +8,9 @@ Monorepo for Terra Classic **UST1** swap tooling against bridged Venus **vFDUSD*
 |------|------|
 | `smartcontracts-terraclassic/packages/ust1-common` | Fixed-point math, oracle policy (`INV-*` in source), shared with contracts + service |
 | `smartcontracts-terraclassic/packages/ust1-cmm` | CMM constants (e.g. mainnet treasury address); `ust1-window` depends on crate `ust1-cmm` via **Git** (see root `Cargo.toml`, `Cargo.lock`). Change this tree, then `cargo update -p ust1-cmm` and commit the lockfile. Optional later: dedicated [`ust1-cmm`](https://gitlab.com/PlasticDigits/ust1-cmm) repo. |
-| `smartcontracts-terraclassic/contracts/ust1-oracle` | On-chain rate `R`, 4h min interval, UTC daily +2% cap, monotonic |
-| `smartcontracts-terraclassic/contracts/ust1-window` | cw20 receive: vFDUSD→mint UST1 + forward vFDUSD to CMM treasury, UST1→burn + `TransferFrom` vFDUSD from treasury; governance-set fee on UST1 leg (`fee_bps`, default 1.0% with 50/50 chain-tax vs CMM accounting); treasury must `IncreaseAllowance` for the window on vFDUSD |
-| `smartcontracts-terraclassic/contracts/cmm-native-wrap` | Native `Wrap` + cw20 `Receive` unwrap: **uluna**↔wLUNC, **uusd**↔wUSTC only; governance `fee_bps` (default **1%** recommended per GitLab #17) with **50/50** chain-tax vs CMM attribution on events / `EffectiveWrap`; per-denom limits; **no** `ust1-oracle` (GitLab #16) |
+| `contracts/ust1-oracle` | On-chain rate `R`, 4h min interval, UTC daily +2% cap, monotonic |
+| `contracts/ust1-window` | cw20 receive: vFDUSD→mint UST1 + forward vFDUSD to CMM treasury, UST1→burn + `TransferFrom` vFDUSD from treasury; governance-set fee on UST1 leg (`fee_bps`, default 1.0% with 50/50 chain-tax vs CMM accounting); treasury must `IncreaseAllowance` for the window on vFDUSD |
+| `contracts/cmm-native-wrap` | Native `Wrap` + cw20 `Receive` unwrap: **uluna**↔wLUNC, **uusd**↔wUSTC only; governance `fee_bps` (default **1%** recommended per GitLab #17) with **50/50** chain-tax vs CMM attribution on events / `EffectiveWrap`; per-denom limits; **no** `ust1-oracle` (GitLab #16) |
 | `oracle-service` | Polls BSC `exchangeRateStored`, applies same policy as chain, broadcasts `UpdateRate` |
 | `scripts/` | Python 3 deploy helpers (no business logic) |
 
@@ -48,8 +48,10 @@ Relevant environment variables: `ORACLE_MAX_SILENCE_SECS`, `POLL_INTERVAL_SECS`,
 ## Build optimized Wasm
 
 ```bash
-make build-optimized   # Docker workspace-optimizer → artifacts/
+make build-optimized   # Docker cosmwasm/optimizer → artifacts/
 ```
+
+Contract crates live under top-level `contracts/` so CosmWasm `bob` picks them up (it only builds workspace members with that path prefix).
 
 ## Git hooks and secret scanning
 

@@ -9,9 +9,9 @@ This document is the **operator-facing deployment path** for production: Terra C
 | LocalTerra helper | [`scripts/deploy_local.py`](../scripts/deploy_local.py) |
 | Optimized wasm (UST1 contracts) | [`make build-optimized`](../Makefile), [`scripts/optimize.sh`](../scripts/optimize.sh) |
 | Oracle service config / canonical BSC token | [`oracle-service/src/config.rs`](../oracle-service/src/config.rs) |
-| On-chain oracle policy (must match service) | [`ust1-common` oracle_policy](../smartcontracts-terraclassic/packages/ust1-common/src/oracle_policy.rs), [`ust1-oracle`](../smartcontracts-terraclassic/contracts/ust1-oracle) |
-| Swap math & limits | [`ust1-common` math](../smartcontracts-terraclassic/packages/ust1-common/src/math.rs), [`ust1-window`](../smartcontracts-terraclassic/contracts/ust1-window) |
-| Native wrap (optional) | [`cmm-native-wrap`](../smartcontracts-terraclassic/contracts/cmm-native-wrap) |
+| On-chain oracle policy (must match service) | [`ust1-common` oracle_policy](../smartcontracts-terraclassic/packages/ust1-common/src/oracle_policy.rs), [`ust1-oracle`](../contracts/ust1-oracle) |
+| Swap math & limits | [`ust1-common` math](../smartcontracts-terraclassic/packages/ust1-common/src/math.rs), [`ust1-window`](../contracts/ust1-window) |
+| Native wrap (optional) | [`cmm-native-wrap`](../contracts/cmm-native-wrap) |
 
 **External runbook (CL8Y bridge):** Cross-chain registration examples use the same `terrad` fee pattern as `cl8y-bridge-monorepo` **`docs/deployment-guide.md`** (§5–6). Keep that document open in your CL8Y checkout when wiring **vFDUSD** on BSC ↔ Terra.
 
@@ -78,27 +78,55 @@ Define once and reuse:
 | **Oracle operator** | Sole caller of `ust1-oracle` `UpdateRate`; seed in `TERRA_MNEMONIC` for the service |
 | **CMM treasury** | Holds bridged **vFDUSD**; signs `IncreaseAllowance` so `ust1-window` can pull on withdraw |
 
+### Known mainnet operator addresses ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19))
+
+| Role | Address | Notes |
+|------|---------|-------|
+| Terra deployer key (`cl8ydeploy`) | `terra1hu4zggf3f8yw6jw3rxrjxn2drwad675gq5k2lv` | `--from` for CW20 / UST1 stack instantiate + store; creator of code id **10184** |
+| Terra admin / governance / bridge admin | `terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l` | CW20 `--admin`; UST1 initial minter (`GOVERNANCE_ADDR`); CL8Y Terra bridge admin (`cl8y2_admin` keyring) |
+| BSC deployer | `0xD699EbC6930F593f0725D2a7dC58ACC65b41a08e` | Historical CL8Y deployer (not required for token register) |
+| BSC admin / TokenRegistry owner | `0xcd4eb82cfc16d5785b4f7e3bfc255e735e79f39c` | Signs `registerToken` / destination / incoming mapping |
+| Venus vFDUSD (BSC) | `0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba` | **8 decimals**; 3rd-party → bridge as **LockUnlock** (`0`), not MintBurn |
+| CL8Y Terra bridge | `terra18m02l2f43c2dagqnz3kfccpgz9pzzz5hk9l5mh5wvr6dcvv47zfqdfs7la` | Minter of Terra bridged vFDUSD CW20 |
+| CL8Y BSC TokenRegistry | `0x3d8820ec93748fd4df8eee6b763834a23938b207` | |
+| CL8Y BSC LockUnlock | `0xd7b3bf05987052009c350874e810df98da95d258` | Handler for Venus vFDUSD |
+| cw20-mintable code id | `10184` | Already stored on `columbus-5` — **do not re-store** |
+
+Phase 2 signs instantiate with **`cl8ydeploy`** (`terra1hu4z…`) but sets contract admin / UST1 minter to **`terra1xsecn…`**. Phase 3 Terra bridge txs use keyring **`cl8y2_admin`** (same `terra1xsecn…` address).
+
 Suggested exports:
 
 ```bash
-export TERRA_RPC="https://terra-classic-rpc.publicnode.com:443"   # or your provider
-export TERRA_LCD="https://terra-classic-lcd.publicnode.com:443" # oracle *service* uses LCD
-export TERRA_KEY_NAME="ust1_deployer"
+export TERRA_RPC="https://terra-classic-rpc.publicnode.com:443"
+export TERRA_LCD="https://terra-classic-lcd.publicnode.com:443"
 export TERRA_CHAIN_ID="columbus-5"
 
-# After CL8Y deploy (record real addresses):
-export TERRA_BRIDGE_ADDRESS="terra1…"
-export BSC_TOKEN_REGISTRY="0x…"
-export BSC_VFDUSD_ERC20="0x…"   # BSC side FDUSD / bridged representation you register
+# Keyring names (import keys that match the addresses below)
+export TERRA_KEY_NAME="cl8ydeploy"          # terra1hu4zggf3f8yw6jw3rxrjxn2drwad675gq5k2lv
+export TERRA_ADMIN="terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l"
+export GOVERNANCE_ADDR="terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l"
+export TERRA_BRIDGE_ADMIN_KEY="cl8y2_admin"  # terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l
 
-# Bridge-internal chain ids (from your CL8Y deployment; typical mainnet values — confirm against your registry):
-export BSC_CHAIN_ID_BYTES4="0x00000038"   # 56 as 4-byte bridge id — VERIFY on your deployment
-export TERRA_CHAIN_ID_BYTES4="0x00000001" # VERIFY
-# Base64 form for Terra execute JSON (example for BSC — must match your bridge’s registered id):
+export TERRA_BRIDGE_ADDRESS="terra18m02l2f43c2dagqnz3kfccpgz9pzzz5hk9l5mh5wvr6dcvv47zfqdfs7la"
+export CW20_MINTABLE_CODE_ID="10184"
+
+export BSC_RPC="https://bsc-dataseed1.binance.org"
+export BSC_TOKEN_REGISTRY="0x3d8820ec93748fd4df8eee6b763834a23938b207"
+export BSC_VFDUSD_ERC20="0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba"  # Venus vFDUSD, 8 decimals
+export BSC_ADMIN="0xcd4eb82cfc16d5785b4f7e3bfc255e735e79f39c"
+
+# Bridge-internal chain ids (CL8Y mainnet)
+export BSC_CHAIN_ID_BYTES4="0x00000038"   # 56
+export TERRA_CHAIN_ID_BYTES4="0x00000001"
 export BSC_CHAIN_B64="AAAAOA=="
+export TERRA_CHAIN_B64="AAAAAQ=="
+
+# Decimals: Terra CW20 vFDUSD = 6 (issue #19); BSC Venus vFDUSD = 8 (on-chain)
+export TERRA_VFDUSD_DECIMALS=6
+export BSC_VFDUSD_DECIMALS=8
 ```
 
-Derive **Terra CW20 → bytes32 / base64** for mappings using the Python snippets in the CL8Y guide (§6.0 / §6.3) so EVM `setTokenDestinationWithDecimals` and Terra `set_incoming_token_mapping` agree.
+Derive **Terra CW20 → bytes32 / base64** for mappings using the Python snippets below (same as CL8Y §6.0 / §6.3) so EVM `setTokenDestinationWithDecimals` and Terra `set_incoming_token_mapping` agree.
 
 ---
 
@@ -115,23 +143,18 @@ Use this end-to-end; record every address and code id in the [registry](#address
 
 ### Tokens (cw20-mintable)
 
-- [ ] Obtain **`cw20_mintable.wasm`** (build from [`PlasticDigits/cw20-mintable`](https://github.com/PlasticDigits/cw20-mintable) with the same optimizer toolchain you trust for production, or your release process).
-- [ ] `wasm store` cw20-mintable → record `CW20_MINTABLE_CODE_ID`.
-- [ ] Instantiate **vFDUSD** on Terra with `mint.minter` = **`TERRA_BRIDGE_ADDRESS`** (bridge mints on incoming EVM→Terra). Use `--admin` per your upgrade policy.
-- [ ] Instantiate **UST1** on Terra with `mint.minter` = **governance** (or a dedicated admin) **not** the bridge. Decimals typically **6** (match your economics); symbol **`UST1`** satisfies cw20-mintable validation.
-- [ ] Query `{"token_info":{}}` on both contracts; record **`TERRA_VFDUSD`**, **`TERRA_UST1`**.
+- [x] **cw20-mintable code id `10184`** already on `columbus-5` — skip `wasm store`.
+- [ ] Instantiate **vFDUSD** (decimals **6**) with `mint.minter` = CL8Y Terra bridge; `--admin` = Terra governance.
+- [ ] Instantiate **UST1** (decimals **6**) with `mint.minter` = Terra governance (not the bridge).
+- [ ] Query `{"token_info":{}}` on both; record **`TERRA_VFDUSD`**, **`TERRA_UST1`**.
 
 ### CL8Y bridge: list and connect vFDUSD (BSC ↔ Terra)
 
-Complete cross-chain registration so the token is routable and mint/burn lines up with the bridge. **Follow CL8Y §6** with your real addresses; below is the *shape* only.
+Venus vFDUSD on BSC is **LockUnlock** (`registerToken` type **`0`**). Terra CW20 is **mint_burn**. See [Phase 3](#phase-3--cl8y-bridge-registration-for-vfdusd-bsc-lockunlock--terra-mint_burn).
 
-- [ ] **BSC `TokenRegistry`:** `registerToken(BSC_VFDUSD_ERC20, handler_code)` per CL8Y.
-- [ ] **Outgoing BSC → Terra:** `setTokenDestinationWithDecimals(BSC_VFDUSD, TERRA_CHAIN_ID_BYTES4, terra_vfdusd_as_bytes32, terra_decimals)`.
-- [ ] **Incoming Terra → BSC:** `setIncomingTokenMapping(TERRA_CHAIN_B64, BSC_VFDUSD_ERC20, src_decimals_from_terra)` (exact args per ABI — mirror CL8Y test token section).
-- [ ] **Terra bridge `add_token`:** `vFDUSD` cw20 with `token_type: "mint_burn"` and `terra_decimals` matching the cw20.
-- [ ] **Terra `set_token_destination`:** Terra vFDUSD → BSC erc20 (dest token as 32-byte hex, dest decimals = BSC side).
-- [ ] **Terra `set_incoming_token_mapping`:** BSC → Terra vFDUSD (src_token = base64-encoded 32-byte form of Terra cw20 address, matching EVM-side bytes32).
-- [ ] **Smoke:** small test lock/mint path on testnet first; on mainnet, verify with minimal amounts and internal tooling before public announcement.
+- [ ] **BSC:** `registerToken(vFDUSD, 0)` then destination + incoming mapping (Terra decimals **6** / BSC **8**).
+- [ ] **Terra:** `add_token` mint_burn → `set_token_destination` → `set_incoming_token_mapping` (bridge admin key).
+- [ ] **Smoke:** minimal BSC→Terra lock/mint before public announcement.
 - [ ] **Frontend / “listed on CL8Y”:** Bridge UI token lists are driven by **on-chain registry + off-chain config** for your environment. After mappings exist, confirm the asset appears in the CL8Y app you expose to users (refresh operator env / token matrix / caches per your CL8Y ops runbook). If the chain is correct but the UI is empty, treat it as an **operator or frontend config** issue, not a UST1 contract issue.
 
 ### UST1 stack (this repo)
@@ -147,7 +170,7 @@ Complete cross-chain registration so the token is routable and mint/burn lines u
 
 ### Optional: `cmm-native-wrap`
 
-- [ ] If wrapping **uluna/uusd**, deploy `cmm-native-wrap` per [`cmm-native-wrap`](../smartcontracts-terraclassic/contracts/cmm-native-wrap) and your governance playbook (no oracle).
+- [ ] If wrapping **uluna/uusd**, deploy `cmm-native-wrap` per [`cmm-native-wrap`](../contracts/cmm-native-wrap) and your governance playbook (no oracle).
 
 ### Oracle service (Render, no YAML)
 
@@ -160,36 +183,38 @@ Complete cross-chain registration so the token is routable and mint/burn lines u
 
 ## Phase 1 — Build UST1 wasm artifacts
 
+Needed for **Phase 4** (`ust1-oracle` / `ust1-window`), **not** for Phase 2 CW20 instantiate (that uses existing code id **10184**).
+
 From repo root:
 
 ```bash
 make build-optimized
 ls -l artifacts/ust1_oracle.wasm artifacts/ust1_window.wasm
+# expect non-empty files; if artifacts/ is empty/root-owned, fix Docker perms and re-run
 ```
 
 Ship **only** artifacts built from a **tagged** revision you have tested.
 
 ---
 
-## Phase 2 — Store and instantiate vFDUSD and UST1 (cw20-mintable)
+## Phase 2 — Instantiate vFDUSD and UST1 (cw20-mintable **10184**)
 
-### Store cw20-mintable once
+**Skip `wasm store`.** Code id `10184` is already on `columbus-5` (creator `terra1hu4z…`). Confirm:
 
 ```bash
-terrad tx wasm store cw20_mintable.wasm \
-  --from "$TERRA_KEY_NAME" \
-  --chain-id columbus-5 \
-  --node "$TERRA_RPC" \
-  --gas auto --gas-adjustment 2.0 \
-  --fees 80000000uluna \
-  --keyring-backend os \
-  --broadcast-mode sync -y
-# export CW20_MINTABLE_CODE_ID=<from tx result>
+terrad query wasm code-info 10184 --chain-id columbus-5 --node "$TERRA_RPC"
+```
+
+Ensure deployer key is funded and imported:
+
+```bash
+terrad keys show "$TERRA_KEY_NAME" -a   # expect terra1hu4zggf3f8yw6jw3rxrjxn2drwad675gq5k2lv
+terrad keys show "$TERRA_BRIDGE_ADMIN_KEY" -a   # expect terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l
 ```
 
 ### Instantiate vFDUSD (bridge is minter)
 
-Governance/upgrade **`--admin`** should be your multisig or policy account.
+Terra CW20 **decimals = 6** (issue #19). BSC Venus token is **8 decimals** — bridge mappings in Phase 3 scale between them. Minter = CL8Y Terra bridge (mints on BSC→Terra). Contract **admin** = UST1 governance.
 
 ```bash
 terrad tx wasm instantiate "$CW20_MINTABLE_CODE_ID" \
@@ -205,9 +230,18 @@ terrad tx wasm instantiate "$CW20_MINTABLE_CODE_ID" \
   --broadcast-mode sync -y
 ```
 
-**Decimals:** Use the decimals that match your **BSC** registration and bridge math (6 and 18 are both common — they must agree across `TokenRegistry`, Terra `add_token`, and the cw20 metadata).
+From the tx events / finder, export:
+
+```bash
+export TERRA_VFDUSD="terra1…"   # _contract_address from instantiate
+terrad query wasm contract-state smart "$TERRA_VFDUSD" '{"token_info":{}}' \
+  --chain-id columbus-5 --node "$TERRA_RPC"
+# expect symbol vFDUSD, decimals 6
+```
 
 ### Instantiate UST1 (governance minter first)
+
+Window is **not** a minter yet — add it in Phase 5 after `ust1-window` exists.
 
 ```bash
 terrad tx wasm instantiate "$CW20_MINTABLE_CODE_ID" \
@@ -221,26 +255,91 @@ terrad tx wasm instantiate "$CW20_MINTABLE_CODE_ID" \
   --fees 10000000uluna \
   --keyring-backend os \
   --broadcast-mode sync -y
+
+export TERRA_UST1="terra1…"
+terrad query wasm contract-state smart "$TERRA_UST1" '{"token_info":{}}' \
+  --chain-id columbus-5 --node "$TERRA_RPC"
 ```
 
-Record `TERRA_VFDUSD` and `TERRA_UST1` contract addresses.
+Record both addresses in the [address registry](#address-registry-template).
 
 ---
 
-## Phase 3 — CL8Y bridge registration for vFDUSD
+## Phase 3 — CL8Y bridge registration for vFDUSD (BSC LockUnlock ↔ Terra mint_burn)
 
-Execute the **symmetric** registration:
+Venus vFDUSD is a **3rd-party** ERC20: on BSC register with handler **`0` = LockUnlock** (lock on deposit / unlock on withdraw). Do **not** use MintBurn (`1`) on BSC — the bridge cannot mint/burn Venus. On Terra the bridged CW20 uses **`mint_burn`** with minter = Terra bridge (already set at instantiate).
 
-- On **BSC**: register token + outgoing destination (to Terra cw20 as bytes32) + incoming mapping (from Terra).
-- On **Terra**: `add_token` + `set_token_destination` + `set_incoming_token_mapping`.
+### 3a — Derive encoding helpers (after `TERRA_VFDUSD` is set)
 
-Copy the exact `cast send` / `terrad tx wasm execute` blocks from **CL8Y `docs/deployment-guide.md` §6.3** (EVM token registry) and the **Terra Side — Add Tokens / destinations / incoming** subsections, substituting:
+```bash
+# Terra CW20 → bytes32 (for EVM dest token) and base64 (for Terra incoming src_token)
+export TERRA_VFDUSD_BYTES32=0x$(python3 -c "import bech32; _, data = bech32.bech32_decode('$TERRA_VFDUSD'); raw = bytes(bech32.convertbits(data, 5, 8, False)); print('00' * (32 - len(raw)) + raw.hex())")
+export TERRA_VFDUSD_HASH_B64=$(python3 -c "import bech32, base64; _, data = bech32.bech32_decode('$TERRA_VFDUSD'); raw = bytes(bech32.convertbits(data, 5, 8, False)); print(base64.b64encode(bytes(32 - len(raw)) + raw).decode())")
 
-- `TERRA_TESTA_*` → your **`TERRA_VFDUSD`** equivalents.
-- EVM test token addresses → **`BSC_VFDUSD_ERC20`**.
-- Decimals in each call → your agreed **BSC / Terra** decimals.
+# BSC token → bytes32 hex (for Terra set_token_destination dest_token)
+export BSC_VFDUSD_B32=$(cast abi-encode "f(address)" "$BSC_VFDUSD_ERC20")
+```
 
-**Do not guess** `BSC_CHAIN_B64` / bytes4 ids: read the live `ChainRegistry` / bridge config for the deployment you integrate with.
+### 3b — BSC TokenRegistry (signed by BSC admin `0xcd4e…`)
+
+`registerToken` second arg: **`0` = LockUnlock**, **`1` = MintBurn**.
+
+```bash
+# 1) Register Venus vFDUSD as LockUnlock
+cast send --interactive --rpc-url "$BSC_RPC" \
+  "$BSC_TOKEN_REGISTRY" "registerToken(address,uint8)" \
+  "$BSC_VFDUSD_ERC20" 0
+
+# 2) Outgoing BSC → Terra (dest decimals = Terra CW20 decimals = 6)
+cast send --interactive --rpc-url "$BSC_RPC" \
+  "$BSC_TOKEN_REGISTRY" "setTokenDestinationWithDecimals(address,bytes4,bytes32,uint8)" \
+  "$BSC_VFDUSD_ERC20" "$TERRA_CHAIN_ID_BYTES4" "$TERRA_VFDUSD_BYTES32" "$TERRA_VFDUSD_DECIMALS"
+
+# 3) Incoming Terra → BSC (src decimals = Terra = 6)
+cast send --interactive --rpc-url "$BSC_RPC" \
+  "$BSC_TOKEN_REGISTRY" "setIncomingTokenMapping(bytes4,address,uint8)" \
+  "$TERRA_CHAIN_ID_BYTES4" "$BSC_VFDUSD_ERC20" "$TERRA_VFDUSD_DECIMALS"
+```
+
+Verify (expect `true` / type `0`):
+
+```bash
+cast call "$BSC_TOKEN_REGISTRY" "tokenRegistered(address)(bool)" "$BSC_VFDUSD_ERC20" --rpc-url "$BSC_RPC"
+```
+
+### 3c — Terra bridge (signed by **bridge admin** key)
+
+```bash
+# 1) Add Terra CW20 as mint_burn (bridge already minter on the CW20)
+terrad tx wasm execute "$TERRA_BRIDGE_ADDRESS" \
+  '{"add_token":{"token":"'"$TERRA_VFDUSD"'","is_native":false,"token_type":"mint_burn","terra_decimals":'"$TERRA_VFDUSD_DECIMALS"'}}' \
+  --from "$TERRA_BRIDGE_ADMIN_KEY" \
+  --chain-id columbus-5 --node "$TERRA_RPC" \
+  --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
+  --keyring-backend os --broadcast-mode sync -y
+
+sleep 10
+
+# 2) Outgoing Terra → BSC (dest decimals = Venus = 8)
+terrad tx wasm execute "$TERRA_BRIDGE_ADDRESS" \
+  '{"set_token_destination":{"token":"'"$TERRA_VFDUSD"'","dest_chain":"'"$BSC_CHAIN_B64"'","dest_token":"'"$BSC_VFDUSD_B32"'","dest_decimals":'"$BSC_VFDUSD_DECIMALS"'}}' \
+  --from "$TERRA_BRIDGE_ADMIN_KEY" \
+  --chain-id columbus-5 --node "$TERRA_RPC" \
+  --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
+  --keyring-backend os --broadcast-mode sync -y
+
+sleep 10
+
+# 3) Incoming BSC → Terra (src_token = Terra CW20 bytes32/base64; src_decimals = BSC = 8)
+terrad tx wasm execute "$TERRA_BRIDGE_ADDRESS" \
+  '{"set_incoming_token_mapping":{"src_chain":"'"$BSC_CHAIN_B64"'","src_token":"'"$TERRA_VFDUSD_HASH_B64"'","local_token":"'"$TERRA_VFDUSD"'","src_decimals":'"$BSC_VFDUSD_DECIMALS"'}}' \
+  --from "$TERRA_BRIDGE_ADMIN_KEY" \
+  --chain-id columbus-5 --node "$TERRA_RPC" \
+  --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
+  --keyring-backend os --broadcast-mode sync -y
+```
+
+Smoke with a **minimal** BSC→Terra lock/mint before announcing. Full CL8Y patterns: `cl8y-bridge-monorepo` `docs/deployment-guide.md` §6.
 
 ---
 
@@ -288,7 +387,7 @@ terrad tx wasm instantiate "$UST1_WINDOW_CODE_ID" \
   --keyring-backend os --broadcast-mode sync -y
 ```
 
-Schemas: [`ust1-oracle` msg](../smartcontracts-terraclassic/contracts/ust1-oracle/src/msg.rs), [`ust1-window` msg](../smartcontracts-terraclassic/contracts/ust1-window/src/msg.rs).
+Schemas: [`ust1-oracle` msg](../contracts/ust1-oracle/src/msg.rs), [`ust1-window` msg](../contracts/ust1-window/src/msg.rs).
 
 ---
 
@@ -397,20 +496,26 @@ Treat mainnet addresses as **recorded-at-deploy**: store code id, tx hashes, and
 
 | Contract / role | Mainnet (`columbus-5`) | Code ID | Address | Notes |
 |-----------------|------------------------|---------|---------|-------|
-| CL8Y Terra bridge | | | | Existing deployment |
-| vFDUSD cw20 | | | | Minter = bridge |
-| UST1 cw20 | | | | Minter includes window |
+| CL8Y Terra bridge | | — | `terra18m02l2f43c2dagqnz3kfccpgz9pzzz5hk9l5mh5wvr6dcvv47zfqdfs7la` | Existing deployment |
+| cw20-mintable | | **10184** | — | Already stored |
+| vFDUSD cw20 | | 10184 | *(fill after Phase 2)* | Minter = bridge; decimals 6 |
+| UST1 cw20 | | 10184 | *(fill after Phase 2)* | Initial minter = governance; add window later |
 | `ust1-oracle` | | | | |
 | `ust1-window` | | | | |
 | CMM treasury | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | — | — | Default `cmm_treasury` if omitted |
-| BSC vFDUSD ERC20 | | | | Registered in CL8Y `TokenRegistry` |
+| Terra deployer (`cl8ydeploy`) | — | — | `terra1hu4zggf3f8yw6jw3rxrjxn2drwad675gq5k2lv` | Code **10184** creator |
+| Terra admin / gov / bridge admin (`cl8y2_admin`) | — | — | `terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l` | CW20 admin + UST1 minter + bridge admin |
+| BSC vFDUSD (Venus) | — | — | `0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba` | LockUnlock; 8 decimals |
+| BSC TokenRegistry | — | — | `0x3d8820ec93748fd4df8eee6b763834a23938b207` | Owner `0xcd4eb8…` |
+| BSC admin | — | — | `0xcd4eb82cfc16d5785b4f7e3bfc255e735e79f39c` | |
+| BSC deployer | — | — | `0xD699EbC6930F593f0725D2a7dC58ACC65b41a08e` | |
 
 ### BSC (oracle path)
 
 | Item | Mainnet |
 |------|---------|
 | Chain ID (EVM) | `56` |
-| Venus vFDUSD vToken | `0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba` |
+| Venus vFDUSD vToken (same as bridged ERC20) | `0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba` |
 
 ---
 
@@ -434,6 +539,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-07-30 | Phase 2/3 operator runbook: code id **10184**, known deployer/gov/BSC addresses, Venus vFDUSD **LockUnlock** + Terra **mint_burn**, decimals Terra 6 / BSC 8 ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-07-30 | Window instantiate example + defaults: `fee_bps=100`, per-tx **1,000** / rolling 24h **10,000** UST1 ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-04-23 | Full mainnet runbook: `terrad` fees/gas, cw20-mintable + CL8Y vFDUSD wiring, UST1 contracts, Render dashboard worker instructions ([issue #15](https://gitlab.com/PlasticDigits/ust1-window/-/issues/15)). |
 | 2026-04-22 | Initial deployment doc and registry. |

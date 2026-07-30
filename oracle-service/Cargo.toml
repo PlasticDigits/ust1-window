@@ -25,7 +25,7 @@ cosmrs = { version = "0.16", features = ["bip32", "cosmwasm"] }
 bip39 = "2.0"
 base64 = "0.22"
 ust1-common = { path = "../smartcontracts-terraclassic/packages/ust1-common" }
-ust1-oracle = { path = "../smartcontracts-terraclassic/contracts/ust1-oracle", features = ["library"] }
+ust1-oracle = { path = "../contracts/ust1-oracle", features = ["library"] }
 secrecy = "0.10.3"
 
 [dev-dependencies]
