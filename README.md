@@ -2,6 +2,16 @@
 
 Monorepo for Terra Classic **UST1** swap tooling against bridged Venus **vFDUSD** (cw20-mintable), with a **rate oracle** (BSC Venus exchange rate) and a **swap window** contract, plus a separate **native wrap** contract for treasury-backed **wLUNC** / **wUSTC** (**uluna** / **uusd**) with **no oracle** (1:1 atoms after `fee_bps`).
 
+## Mainnet status (`columbus-5`)
+
+Phase 2 token instantiate complete ([GitLab #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). Oracle/window and bridge wiring still pending — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
+| Asset | Address | Code ID | Decimals | Minter / notes |
+|-------|---------|---------|----------|----------------|
+| **vFDUSD** (bridged CW20) | [`terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3`](https://finder.terra.money/classic/address/terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3) | 10184 | 6 | CL8Y Terra bridge `terra18m02l…` — [instantiate tx](https://finder.terra.money/classic/tx/48D01D2DBEDFC46603B37C7F62FE9207CDB0683277E7E0778D94AF4091C51F02) |
+| **UST1** | [`terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72`](https://finder.terra.money/classic/address/terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72) | 10184 | 6 | Governance `terra1xsecn…` (window `add_minter` later) — [instantiate tx](https://finder.terra.money/classic/tx/2A5970A8F1F74FF5970F2241B77A07BB1148B2C2BFD4FCB9290D776568E63EAF) |
+| Venus vFDUSD (BSC) | [`0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba`](https://bscscan.com/address/0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba) | — | 8 | Bridge **LockUnlock**; registered on CL8Y TokenRegistry |
+
 ## Packages
 
 | Path | Role |

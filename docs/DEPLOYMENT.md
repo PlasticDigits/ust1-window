@@ -36,7 +36,7 @@ Terra Classic is easy to get wrong if you copy “generic Cosmos” snippets. Pr
 3. **Use automatic gas *with* headroom:** `--gas auto --gas-adjustment 1.5` (instantiate) or **`1.8`–`2.5`** for `wasm store` of large binaries when simulation underestimates.
 4. **Always attach an explicit fee budget in `uluna`:** `--fees <N>uluna`.  
    Naive `--gas auto` without a sufficient fee cap often yields `insufficient fees` or flaky simulation. The CL8Y deployment guide uses **`--fees 10000000uluna`** for many executes; **`wasm store`** commonly needs **more** (try `50000000uluna`–`150000000uluna` and increase if the node still rejects).
-5. **Keyring:** `--keyring-backend os` (or `file`) consistent with how you imported keys.
+5. **Keyring:** use the same `--keyring-backend` as your imports (this ops setup uses **`file`** — see `~/.terra/config/client.toml`). Do not pass `os` if keys live under `keyring-file`.
 6. **Broadcast mode:** `--broadcast-mode sync` (or `block`) so you can inspect the tx result immediately.
 
 **Wasm `store` example:**
@@ -50,7 +50,7 @@ terrad tx wasm store artifacts/ust1_oracle.wasm \
   --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 2.0 \
   --fees "${FEES_ULUNA}uluna" \
-  --keyring-backend os \
+  --keyring-backend file \
   --broadcast-mode sync -y
 ```
 
@@ -106,6 +106,7 @@ export TERRA_KEY_NAME="cl8ydeploy"          # terra1hu4zggf3f8yw6jw3rxrjxn2drwad
 export TERRA_ADMIN="terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l"
 export GOVERNANCE_ADDR="terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l"
 export TERRA_BRIDGE_ADMIN_KEY="cl8y2_admin"  # terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l
+export KEYRING_BACKEND="file"               # matches ~/.terra/config/client.toml
 
 export TERRA_BRIDGE_ADDRESS="terra18m02l2f43c2dagqnz3kfccpgz9pzzz5hk9l5mh5wvr6dcvv47zfqdfs7la"
 export CW20_MINTABLE_CODE_ID="10184"
@@ -144,9 +145,9 @@ Use this end-to-end; record every address and code id in the [registry](#address
 ### Tokens (cw20-mintable)
 
 - [x] **cw20-mintable code id `10184`** already on `columbus-5` — skip `wasm store`.
-- [ ] Instantiate **vFDUSD** (decimals **6**) with `mint.minter` = CL8Y Terra bridge; `--admin` = Terra governance.
-- [ ] Instantiate **UST1** (decimals **6**) with `mint.minter` = Terra governance (not the bridge).
-- [ ] Query `{"token_info":{}}` on both; record **`TERRA_VFDUSD`**, **`TERRA_UST1`**.
+- [x] Instantiate **vFDUSD** (decimals **6**) — `terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3` (minter = bridge).
+- [x] Instantiate **UST1** (decimals **6**) — `terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72` (minter = governance).
+- [x] Query `{"token_info":{}}` on both; record **`TERRA_VFDUSD`**, **`TERRA_UST1`** (see [address registry](#address-registry-template)).
 
 ### CL8Y bridge: list and connect vFDUSD (BSC ↔ Terra)
 
@@ -226,14 +227,15 @@ terrad tx wasm instantiate "$CW20_MINTABLE_CODE_ID" \
   --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 1.5 \
   --fees 10000000uluna \
-  --keyring-backend os \
+  --keyring-backend file \
   --broadcast-mode sync -y
 ```
 
-From the tx events / finder, export:
+Mainnet (2026-07-30):
 
 ```bash
-export TERRA_VFDUSD="terra1…"   # _contract_address from instantiate
+export TERRA_VFDUSD="terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3"
+# tx 48D01D2DBEDFC46603B37C7F62FE9207CDB0683277E7E0778D94AF4091C51F02
 terrad query wasm contract-state smart "$TERRA_VFDUSD" '{"token_info":{}}' \
   --chain-id columbus-5 --node "$TERRA_RPC"
 # expect symbol vFDUSD, decimals 6
@@ -253,15 +255,16 @@ terrad tx wasm instantiate "$CW20_MINTABLE_CODE_ID" \
   --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 1.5 \
   --fees 10000000uluna \
-  --keyring-backend os \
+  --keyring-backend file \
   --broadcast-mode sync -y
 
-export TERRA_UST1="terra1…"
+export TERRA_UST1="terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72"
+# tx 2A5970A8F1F74FF5970F2241B77A07BB1148B2C2BFD4FCB9290D776568E63EAF
 terrad query wasm contract-state smart "$TERRA_UST1" '{"token_info":{}}' \
   --chain-id columbus-5 --node "$TERRA_RPC"
 ```
 
-Record both addresses in the [address registry](#address-registry-template).
+Record both addresses in the [address registry](#address-registry-template) (already filled for mainnet).
 
 ---
 
@@ -316,7 +319,7 @@ terrad tx wasm execute "$TERRA_BRIDGE_ADDRESS" \
   --from "$TERRA_BRIDGE_ADMIN_KEY" \
   --chain-id columbus-5 --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
-  --keyring-backend os --broadcast-mode sync -y
+  --keyring-backend file --broadcast-mode sync -y
 
 sleep 10
 
@@ -326,7 +329,7 @@ terrad tx wasm execute "$TERRA_BRIDGE_ADDRESS" \
   --from "$TERRA_BRIDGE_ADMIN_KEY" \
   --chain-id columbus-5 --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
-  --keyring-backend os --broadcast-mode sync -y
+  --keyring-backend file --broadcast-mode sync -y
 
 sleep 10
 
@@ -336,7 +339,7 @@ terrad tx wasm execute "$TERRA_BRIDGE_ADDRESS" \
   --from "$TERRA_BRIDGE_ADMIN_KEY" \
   --chain-id columbus-5 --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
-  --keyring-backend os --broadcast-mode sync -y
+  --keyring-backend file --broadcast-mode sync -y
 ```
 
 Smoke with a **minimal** BSC→Terra lock/mint before announcing. Full CL8Y patterns: `cl8y-bridge-monorepo` `docs/deployment-guide.md` §6.
@@ -351,12 +354,12 @@ Smoke with a **minimal** BSC→Terra lock/mint before announcing. Full CL8Y patt
 terrad tx wasm store artifacts/ust1_oracle.wasm \
   --from "$TERRA_KEY_NAME" --chain-id columbus-5 --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 2.0 --fees 80000000uluna \
-  --keyring-backend os --broadcast-mode sync -y
+  --keyring-backend file --broadcast-mode sync -y
 
 terrad tx wasm store artifacts/ust1_window.wasm \
   --from "$TERRA_KEY_NAME" --chain-id columbus-5 --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 2.0 --fees 80000000uluna \
-  --keyring-backend os --broadcast-mode sync -y
+  --keyring-backend file --broadcast-mode sync -y
 ```
 
 ### Instantiate oracle
@@ -369,7 +372,7 @@ terrad tx wasm instantiate "$UST1_ORACLE_CODE_ID" \
   --from "$TERRA_KEY_NAME" \
   --chain-id columbus-5 --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
-  --keyring-backend os --broadcast-mode sync -y
+  --keyring-backend file --broadcast-mode sync -y
 ```
 
 ### Instantiate window
@@ -384,7 +387,7 @@ terrad tx wasm instantiate "$UST1_WINDOW_CODE_ID" \
   --from "$TERRA_KEY_NAME" \
   --chain-id columbus-5 --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 1.5 --fees 15000000uluna \
-  --keyring-backend os --broadcast-mode sync -y
+  --keyring-backend file --broadcast-mode sync -y
 ```
 
 Schemas: [`ust1-oracle` msg](../contracts/ust1-oracle/src/msg.rs), [`ust1-window` msg](../contracts/ust1-window/src/msg.rs).
@@ -403,7 +406,7 @@ terrad tx wasm execute "$TERRA_UST1" \
   --from "$GOVERNANCE_KEY" \
   --chain-id columbus-5 --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
-  --keyring-backend os --broadcast-mode sync -y
+  --keyring-backend file --broadcast-mode sync -y
 ```
 
 ### 2) Treasury vFDUSD allowance for withdraw path
@@ -416,7 +419,7 @@ terrad tx wasm execute "$TERRA_VFDUSD" \
   --from "$TREASURY_KEY" \
   --chain-id columbus-5 --node "$TERRA_RPC" \
   --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
-  --keyring-backend os --broadcast-mode sync -y
+  --keyring-backend file --broadcast-mode sync -y
 ```
 
 Use your policy for `amount` / `expires`. The amount above is **u128::max** as a JSON string (matches integration tests); prefer an explicit cap if your treasury policy requires it.
@@ -498,14 +501,14 @@ Treat mainnet addresses as **recorded-at-deploy**: store code id, tx hashes, and
 |-----------------|------------------------|---------|---------|-------|
 | CL8Y Terra bridge | | — | `terra18m02l2f43c2dagqnz3kfccpgz9pzzz5hk9l5mh5wvr6dcvv47zfqdfs7la` | Existing deployment |
 | cw20-mintable | | **10184** | — | Already stored |
-| vFDUSD cw20 | | 10184 | *(fill after Phase 2)* | Minter = bridge; decimals 6 |
-| UST1 cw20 | | 10184 | *(fill after Phase 2)* | Initial minter = governance; add window later |
-| `ust1-oracle` | | | | |
-| `ust1-window` | | | | |
+| vFDUSD cw20 | live | 10184 | `terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3` | Minter = bridge; decimals 6; tx `48D01D2D…1F02` |
+| UST1 cw20 | live | 10184 | `terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72` | Minter = governance `terra1xsecn…`; decimals 6; tx `2A5970A8…3EAF` |
+| `ust1-oracle` | | | *(pending Phase 4)* | Optimized wasm built locally |
+| `ust1-window` | | | *(pending Phase 4)* | Optimized wasm built locally |
 | CMM treasury | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | — | — | Default `cmm_treasury` if omitted |
 | Terra deployer (`cl8ydeploy`) | — | — | `terra1hu4zggf3f8yw6jw3rxrjxn2drwad675gq5k2lv` | Code **10184** creator |
 | Terra admin / gov / bridge admin (`cl8y2_admin`) | — | — | `terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l` | CW20 admin + UST1 minter + bridge admin |
-| BSC vFDUSD (Venus) | — | — | `0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba` | LockUnlock; 8 decimals |
+| BSC vFDUSD (Venus) | — | — | `0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba` | LockUnlock; 8 decimals; registered on TokenRegistry |
 | BSC TokenRegistry | — | — | `0x3d8820ec93748fd4df8eee6b763834a23938b207` | Owner `0xcd4eb8…` |
 | BSC admin | — | — | `0xcd4eb82cfc16d5785b4f7e3bfc255e735e79f39c` | |
 | BSC deployer | — | — | `0xD699EbC6930F593f0725D2a7dC58ACC65b41a08e` | |
@@ -539,6 +542,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-07-30 | Mainnet CW20s live: **vFDUSD** `terra1mnl9…svj3`, **UST1** `terra1f0eq…fy72` (code **10184**); registry + README updated ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-07-30 | Phase 2/3 operator runbook: code id **10184**, known deployer/gov/BSC addresses, Venus vFDUSD **LockUnlock** + Terra **mint_burn**, decimals Terra 6 / BSC 8 ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-07-30 | Window instantiate example + defaults: `fee_bps=100`, per-tx **1,000** / rolling 24h **10,000** UST1 ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-04-23 | Full mainnet runbook: `terrad` fees/gas, cw20-mintable + CL8Y vFDUSD wiring, UST1 contracts, Render dashboard worker instructions ([issue #15](https://gitlab.com/PlasticDigits/ust1-window/-/issues/15)). |
