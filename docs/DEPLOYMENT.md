@@ -275,11 +275,11 @@ terrad tx wasm instantiate "$UST1_ORACLE_CODE_ID" \
 
 ### Instantiate window
 
-`per_tx_ust1_limit` / `rolling_24h_ust1_limit` are **raw base units** (for 6 decimals, multiply whole UST1 by `1_000_000`).
+`per_tx_ust1_limit` / `rolling_24h_ust1_limit` are **raw base units** (for 6 decimals, multiply whole UST1 by `1_000_000`). Approved mainnet defaults ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)): `fee_bps=100` (1%), **1,000** UST1 per tx (`"1000000000"`), **10,000** UST1 rolling 24h (`"10000000000"`). Same constants live in `ust1-common` (`DEFAULT_FEE_BPS`, `DEFAULT_PER_TX_UST1_LIMIT`, `DEFAULT_ROLLING_24H_UST1_LIMIT`). Limits are governance-updatable after deploy via `SetLimits` (no code change / remigrate required).
 
 ```bash
 terrad tx wasm instantiate "$UST1_WINDOW_CODE_ID" \
-  '{"governance":"'"$GOVERNANCE_ADDR"'","oracle":"'"$ORACLE_ADDR"'","vfdusd_token":"'"$TERRA_VFDUSD"'","cmm_treasury":null,"ust1_token":"'"$TERRA_UST1"'","fee_bps":100,"per_tx_ust1_limit":"500000000","rolling_24h_ust1_limit":"2500000000","max_oracle_age_sec":null}' \
+  '{"governance":"'"$GOVERNANCE_ADDR"'","oracle":"'"$ORACLE_ADDR"'","vfdusd_token":"'"$TERRA_VFDUSD"'","cmm_treasury":null,"ust1_token":"'"$TERRA_UST1"'","fee_bps":100,"per_tx_ust1_limit":"1000000000","rolling_24h_ust1_limit":"10000000000","max_oracle_age_sec":null}' \
   --label "ust1-window" \
   --admin "$TERRA_ADMIN" \
   --from "$TERRA_KEY_NAME" \
@@ -434,5 +434,6 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-07-30 | Window instantiate example + defaults: `fee_bps=100`, per-tx **1,000** / rolling 24h **10,000** UST1 ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-04-23 | Full mainnet runbook: `terrad` fees/gas, cw20-mintable + CL8Y vFDUSD wiring, UST1 contracts, Render dashboard worker instructions ([issue #15](https://gitlab.com/PlasticDigits/ust1-window/-/issues/15)). |
 | 2026-04-22 | Initial deployment doc and registry. |

@@ -5,7 +5,10 @@ use cw20::{Cw20ExecuteMsg, Expiration, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
 
 use crate::msg::{ConfigResponse, Cw20HookMsg, ExecuteMsg, InstantiateMsg, QueryMsg};
-use ust1_common::{DEFAULT_MAX_ORACLE_AGE_SECS, MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE};
+use ust1_common::{
+    DEFAULT_FEE_BPS, DEFAULT_MAX_ORACLE_AGE_SECS, DEFAULT_PER_TX_UST1_LIMIT,
+    DEFAULT_ROLLING_24H_UST1_LIMIT, MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE,
+};
 use ust1_oracle::msg as oracle_msg;
 
 fn oracle_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
@@ -129,9 +132,9 @@ fn setup_with_treasury_allowance(grant_allowance: bool) -> Env {
                 vfdusd_token: vfdusd.to_string(),
                 cmm_treasury: Some(treasury.to_string()),
                 ust1_token: ust1.to_string(),
-                fee_bps: 100,
-                per_tx_ust1_limit: Uint128::from(500_000_000u128),
-                rolling_24h_ust1_limit: Uint128::from(2_500_000_000u128),
+                fee_bps: DEFAULT_FEE_BPS,
+                per_tx_ust1_limit: Uint128::from(DEFAULT_PER_TX_UST1_LIMIT),
+                rolling_24h_ust1_limit: Uint128::from(DEFAULT_ROLLING_24H_UST1_LIMIT),
                 max_oracle_age_sec: None,
             },
             &[],

@@ -20,6 +20,16 @@ pub const RATE_SCALE: u128 = 1_000_000_000_000_000_000; // 1e18
 /// Default swap fee: 1.0% on the UST1 leg (each direction); see [`fee_split`] for accounting.
 pub const DEFAULT_FEE_BPS: u16 = 100;
 
+/// Default per-tx UST1 notional cap in raw base units (6 decimals): **1,000 UST1**.
+///
+/// Governance-updatable after instantiate via `ust1-window` `SetLimits`.
+pub const DEFAULT_PER_TX_UST1_LIMIT: u128 = 1_000_000_000;
+
+/// Default rolling 24h UST1 notional cap in raw base units (6 decimals): **10,000 UST1**.
+///
+/// Governance-updatable after instantiate via `ust1-window` `SetLimits`.
+pub const DEFAULT_ROLLING_24H_UST1_LIMIT: u128 = 10_000_000_000;
+
 /// Max relative increase of oracle rate within one UTC calendar day (2%).
 pub const MAX_DAILY_INCREASE_BPS: u16 = 200;
 
