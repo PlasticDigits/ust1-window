@@ -76,7 +76,7 @@ Define once and reuse:
 | **EVM admin key** | BSC `TokenRegistry` owner calls (`registerToken`, destinations, incoming mappings) |
 | **Governance (multisig)** | `ust1-*` governance messages; optional contract admin |
 | **Oracle operator** | Sole caller of `ust1-oracle` `UpdateRate`; seed in `TERRA_MNEMONIC` for the service |
-| **CMM treasury** | Holds bridged **vFDUSD**; signs `IncreaseAllowance` so `ust1-window` can pull on withdraw |
+| **CMM treasury** | ustr-cmm **Treasury contract** (not an EOA): holds inventory; **cannot** emit CW20 `IncreaseAllowance` (see Phase 5) |
 
 ### Known mainnet operator addresses ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19))
 
@@ -162,10 +162,10 @@ Venus vFDUSD on BSC is **LockUnlock** (`registerToken` type **`0`**). Terra CW20
 
 - [ ] `make build-optimized` at the git revision you intend to ship; record git SHA.
 - [ ] `wasm store` `artifacts/ust1_oracle.wasm`, `artifacts/ust1_window.wasm` → code IDs.
-- [ ] Instantiate **`ust1-oracle`** with `governance`, `oracle_operator`, `initial_rate` (`"1000000000000000000"` for 1:1 at `RATE_SCALE`; see `ust1-common`).
-- [ ] Instantiate **`ust1-window`** with `oracle`, `vfdusd_token`, `ust1_token`, limits, `fee_bps`, optional `cmm_treasury` (omit to use [`CMM_TREASURY_MAINNET`](../smartcontracts-terraclassic/packages/ust1-cmm/src/lib.rs)).
+- [x] Instantiate **`ust1-oracle`** — `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` (code **11549**).
+- [x] Instantiate **`ust1-window`** — `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` (code **11550**; approved fee/limits; default CMM treasury).
 - [ ] **UST1 minters:** from governance, execute cw20-mintable **`add_minter`** for **`ust1-window`** (see integration tests in `ust1-integration-tests`).
-- [ ] **Treasury allowance:** from CMM treasury, **`increase_allowance`** on **vFDUSD** for **window** (spender = window contract; amount per policy).
+- [ ] **Treasury / withdraw inventory:** default `cmm_treasury` is the ustr-cmm Treasury **contract** — it has **no** CW20 `IncreaseAllowance` path; decide custody model before withdraw smoke (see Phase 5).
 - [ ] **Governance handoff:** if required, run `ProposeGovernance` / `AcceptGovernance` on oracle and window.
 - [ ] **First oracle commit:** `oracle_operator` sends `UpdateRate` consistent with policy (service will continue updates).
 
@@ -409,20 +409,25 @@ terrad tx wasm execute "$TERRA_UST1" \
   --keyring-backend file --broadcast-mode sync -y
 ```
 
-### 2) Treasury vFDUSD allowance for withdraw path
+### 2) Withdraw inventory / allowance (CMM treasury is a contract)
 
-From **CMM treasury** (holder of vFDUSD):
+Default `cmm_treasury` is the **ustr-cmm Treasury** contract:
 
-```bash
-terrad tx wasm execute "$TERRA_VFDUSD" \
-  '{"increase_allowance":{"spender":"'"$WINDOW_ADDR"'","amount":"340282366920938463463374607431768211455","expires":{"never":{}}}}' \
-  --from "$TREASURY_KEY" \
-  --chain-id columbus-5 --node "$TERRA_RPC" \
-  --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
-  --keyring-backend file --broadcast-mode sync -y
-```
+`terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2`
 
-Use your policy for `amount` / `expires`. The amount above is **u128::max** as a JSON string (matches integration tests); prefer an explicit cap if your treasury policy requires it.
+It is **not** an EOA. Governance is `terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l`. On-chain execute surface supports CW20 **Receive**, timelocked **ProposeWithdraw** / **ExecuteWithdraw** (`Transfer`), whitelist, and native **InstantWithdraw** for registered wrappers — **not** CW20 `IncreaseAllowance`.
+
+`ust1-window` withdraws via **`TransferFrom`** on vFDUSD with `owner = cmm_treasury`, so the owner must have approved the window. That approval **cannot** be submitted as `--from` the treasury address with a keyring key.
+
+**Policy target (when allowance is possible):** 10,000 vFDUSD = `10000000000` (6 decimals).
+
+**Viable paths (pick one before withdraw smoke):**
+
+1. **Custody EOA / allowance-capable vault as `cmm_treasury`** — re-instantiate window with that address (config field is instantiate-only; no `SetTreasury`). Fund it with vFDUSD; that account runs `increase_allowance` for the window.
+2. **Extend ustr-cmm Treasury** (migrate) with a governance-gated CW20 allowance / pull exec the window can rely on.
+3. **Change `ust1-window`** to withdraw through a treasury API (e.g. registered spender / InstantWithdraw-style CW20) instead of `TransferFrom`.
+
+Do **not** run the EOA-style `increase_allowance` against the default treasury address — it will not work.
 
 ### 3) First oracle rate
 
@@ -503,9 +508,9 @@ Treat mainnet addresses as **recorded-at-deploy**: store code id, tx hashes, and
 | cw20-mintable | | **10184** | — | Already stored |
 | vFDUSD cw20 | live | 10184 | `terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3` | Minter = bridge; decimals 6; tx `48D01D2D…1F02` |
 | UST1 cw20 | live | 10184 | `terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72` | Minter = governance `terra1xsecn…`; decimals 6; tx `2A5970A8…3EAF` |
-| `ust1-oracle` | | | *(pending Phase 4)* | Optimized wasm built locally |
-| `ust1-window` | | | *(pending Phase 4)* | Optimized wasm built locally |
-| CMM treasury | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | — | — | Default `cmm_treasury` if omitted |
+| `ust1-oracle` | live | **11549** | `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` | Operator `terra1hm3ph0jevtkuc9efj9q3ld3ktk3g6la3ruhqna`; tx `EFA79773…355E` |
+| `ust1-window` | live | **11550** | `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` | fee_bps=100; per-tx 1000 / 24h 10000 UST1; tx `9F078327…224C` |
+| CMM treasury (ustr-cmm) | live | **10673** (per ustr-cmm README) | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | Contract, not EOA; no CW20 allowance exec; gov `terra1xsecn…` |
 | Terra deployer (`cl8ydeploy`) | — | — | `terra1hu4zggf3f8yw6jw3rxrjxn2drwad675gq5k2lv` | Code **10184** creator |
 | Terra admin / gov / bridge admin (`cl8y2_admin`) | — | — | `terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l` | CW20 admin + UST1 minter + bridge admin |
 | BSC vFDUSD (Venus) | — | — | `0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba` | LockUnlock; 8 decimals; registered on TokenRegistry |

@@ -4,13 +4,30 @@ Monorepo for Terra Classic **UST1** swap tooling against bridged Venus **vFDUSD*
 
 ## Mainnet status (`columbus-5`)
 
-Phase 2 token instantiate complete ([GitLab #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). Oracle/window and bridge wiring still pending — see [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). Post-deploy wiring (`add_minter`, treasury allowance, first `UpdateRate`, oracle service) still pending — full operator registry in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
 
-| Asset | Address | Code ID | Decimals | Minter / notes |
-|-------|---------|---------|----------|----------------|
-| **vFDUSD** (bridged CW20) | [`terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3`](https://finder.terra.money/classic/address/terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3) | 10184 | 6 | CL8Y Terra bridge `terra18m02l…` — [instantiate tx](https://finder.terra.money/classic/tx/48D01D2DBEDFC46603B37C7F62FE9207CDB0683277E7E0778D94AF4091C51F02) |
-| **UST1** | [`terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72`](https://finder.terra.money/classic/address/terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72) | 10184 | 6 | Governance `terra1xsecn…` (window `add_minter` later) — [instantiate tx](https://finder.terra.money/classic/tx/2A5970A8F1F74FF5970F2241B77A07BB1148B2C2BFD4FCB9290D776568E63EAF) |
-| Venus vFDUSD (BSC) | [`0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba`](https://bscscan.com/address/0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba) | — | 8 | Bridge **LockUnlock**; registered on CL8Y TokenRegistry |
+### Contracts & tokens
+
+| Asset | Address | Code ID | Notes |
+|-------|---------|---------|-------|
+| cw20-mintable | — | **10184** | Shared CW20 code |
+| **vFDUSD** (bridged CW20) | `terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3` | 10184 | Decimals **6**; minter = CL8Y Terra bridge |
+| **UST1** | `terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72` | 10184 | Decimals **6**; minter = governance (window `add_minter` pending) |
+| **ust1-oracle** | `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` | **11549** | Operator `terra1hm3ph0jevtkuc9efj9q3ld3ktk3g6la3ruhqna`; initial rate `1e18` |
+| **ust1-window** | `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` | **11550** | `fee_bps=100`; per-tx **1000** / rolling 24h **10000** UST1; CMM treasury default |
+| CMM treasury (ustr-cmm) | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | — | **Contract** (not EOA); no CW20 `IncreaseAllowance` — withdraw custody TBD |
+| CL8Y Terra bridge | `terra18m02l2f43c2dagqnz3kfccpgz9pzzz5hk9l5mh5wvr6dcvv47zfqdfs7la` | — | vFDUSD minter; BSC↔Terra registered |
+
+### Roles & BSC
+
+| Role / asset | Address |
+|--------------|---------|
+| Terra deployer (`cl8ydeploy`) | `terra1hu4zggf3f8yw6jw3rxrjxn2drwad675gq5k2lv` |
+| Terra admin / governance / bridge admin (`cl8y2_admin`) | `terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l` |
+| Oracle operator | `terra1hm3ph0jevtkuc9efj9q3ld3ktk3g6la3ruhqna` |
+| Venus vFDUSD (BSC, 8 decimals, LockUnlock) | `0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba` |
+| CL8Y BSC TokenRegistry | `0x3d8820ec93748fd4df8eee6b763834a23938b207` |
+| BSC admin (TokenRegistry owner) | `0xcd4eb82cfc16d5785b4f7e3bfc255e735e79f39c` |
 
 ## Packages
 
