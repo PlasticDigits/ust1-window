@@ -189,12 +189,16 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
 }
 
 fn query_state(deps: Deps) -> StdResult<StateResponse> {
+    let cfg = CONFIG.load(deps.storage)?;
     let st = ORACLE_STATE.load(deps.storage)?;
     Ok(StateResponse {
         rate: st.rate,
         last_update_sec: st.last_update_sec,
         utc_day_id: st.utc_day_id,
         day_baseline_rate: st.day_baseline_rate,
+        // Surfaced from config (not OracleState storage) so pause is visible on the
+        // same query the window already uses — additive, no storage layout change.
+        paused: cfg.paused,
     })
 }
 
