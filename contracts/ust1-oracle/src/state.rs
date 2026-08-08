@@ -6,6 +6,12 @@ pub const CONTRACT_NAME: &str = "crates.io:ust1-oracle";
 pub const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Governance: admin ops. Oracle operator: rate updates only.
+///
+/// # Invariants
+///
+/// - **INV-ORACLE-PAUSE-001**: When `paused`, `UpdateRate` is rejected and `State.paused`
+///   is `true` so all window readers fail closed immediately (GitLab #22 / audit C-2 #1).
+///   Pause and unpause are governance-only (no operator auto-unpause).
 #[cw_serde]
 pub struct Config {
     pub governance: Addr,

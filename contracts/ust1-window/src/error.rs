@@ -30,6 +30,10 @@ pub enum ContractError {
     #[error("oracle rate is stale or not yet committed on-chain (run at least one UpdateRate)")]
     OracleStale {},
 
+    /// Oracle governance circuit breaker (**INV-ORACLE-PAUSE-001** / GitLab #22).
+    #[error("oracle is paused (circuit breaker)")]
+    OraclePaused {},
+
     #[error("max oracle age must be at least {min_seconds}s (oracle min update interval)")]
     MaxOracleAgeTooShort { min_seconds: u64 },
 

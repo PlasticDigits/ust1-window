@@ -50,7 +50,7 @@ Pulls are **fail-closed** without `limit_24h` (ustr-cmm#7). Align quota with win
 1. **INV-WITHDRAW-001**: Happy-path withdraw does **not** call CW20 `TransferFrom` or query allowance. It calls treasury `InstantWithdrawCw20`.
 2. **INV-WITHDRAW-002**: Response messages are ordered **Burn UST1 → InstantWithdrawCw20**; same tx; either failure reverts (no partial burn).
 3. **Deposit unchanged**: vFDUSD `Transfer` → `cmm_treasury` after mint.
-4. **Guards preserved**: oracle freshness, fee math (`INV-SWAP-*`), per-tx / rolling limits (`INV-LIMIT-001`), pause, `min_vfdusd_out`. Prefer keep treasury balance check → `InsufficientVfdusd`.
+4. **Guards preserved**: oracle usability (`INV-ORACLE-PAUSE-001` then freshness), fee math (`INV-SWAP-*`), per-tx / rolling limits (`INV-LIMIT-001`), window pause, `min_vfdusd_out`. Prefer keep treasury balance check → `InsufficientVfdusd`. See [`oracle-circuit-breaker`](../oracle-circuit-breaker/SKILL.md).
 5. **Recipient**: cw20 Send `sender` only (not attacker-controlled hook field).
 6. **`cmm_treasury` instantiate-only** unless a separate issue adds `SetTreasury`.
 7. **No public pull entry** on the window — only via UST1 `Receive` withdraw hook.

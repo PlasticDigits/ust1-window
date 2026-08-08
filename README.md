@@ -35,7 +35,7 @@ Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/Pla
 |------|------|
 | `smartcontracts-terraclassic/packages/ust1-common` | Fixed-point math, oracle policy (`INV-*` in source), shared with contracts + service |
 | `smartcontracts-terraclassic/packages/ust1-cmm` | CMM constants (e.g. mainnet treasury address); `ust1-window` depends on crate `ust1-cmm` via **Git** (see root `Cargo.toml`, `Cargo.lock`). Change this tree, then `cargo update -p ust1-cmm` and commit the lockfile. Optional later: dedicated [`ust1-cmm`](https://gitlab.com/PlasticDigits/ust1-cmm) repo. |
-| `contracts/ust1-oracle` | On-chain rate `R`, 4h min interval, UTC daily +2% cap, monotonic |
+| `contracts/ust1-oracle` | On-chain rate `R`, 4h min interval, UTC daily +2% cap, monotonic; governance pause surfaces on `State.paused` (circuit breaker, [#22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22)) |
 | `contracts/ust1-window` | cw20 receive: vFDUSD→mint UST1 + forward vFDUSD to CMM treasury; UST1→burn + treasury `InstantWithdrawCw20` (registered spender; no CW20 allowance); governance-set fee on UST1 leg (`fee_bps`, default 1.0% with 50/50 chain-tax vs CMM accounting). Skill: [`skills/window-instant-withdraw-cw20`](skills/window-instant-withdraw-cw20/SKILL.md) |
 | `contracts/cmm-native-wrap` | Native `Wrap` + cw20 `Receive` unwrap: **uluna**↔wLUNC, **uusd**↔wUSTC only; governance `fee_bps` (default **1%** recommended per GitLab #17) with **50/50** chain-tax vs CMM attribution on events / `EffectiveWrap`; per-denom limits; **no** `ust1-oracle` (GitLab #16) |
 | `oracle-service` | Polls BSC `exchangeRateStored`, applies same policy as chain, broadcasts `UpdateRate` (poll/silence defaults: [`skills/oracle-ops-poll-silence`](skills/oracle-ops-poll-silence/SKILL.md)) |
@@ -47,6 +47,7 @@ Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/Pla
 - **INV-MATH-002** — `ust1-common/src/fee_split.rs` + `ust1-window` / `cmm-native-wrap` event attributes and `Effective*` queries (GitLab #17)
 - **INV-ORACLE-THROTTLE-001 / INV-ORACLE-DAILY-001 / INV-ORACLE-MONO-001** — `ust1-common/src/oracle_policy.rs` + `ust1-oracle`
 - **INV-ORACLE-OPS-POLL-001 / INV-ORACLE-OPS-SILENCE-001** — oracle-service poll ≪ / silence ≤ window `DEFAULT_MAX_ORACLE_AGE_SECS` ([#24](https://gitlab.com/PlasticDigits/ust1-window/-/issues/24); skill [`skills/oracle-ops-poll-silence`](skills/oracle-ops-poll-silence/SKILL.md))
+- **INV-ORACLE-PAUSE-001** — oracle `State.paused` + window `ensure_oracle_usable` fail-closed on deposit/withdraw ([#22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22); skill [`skills/oracle-circuit-breaker`](skills/oracle-circuit-breaker/SKILL.md))
 - **INV-LIMIT-001** — `ust1-window/src/state.rs`, enforced in `contract.rs`
 - **INV-WITHDRAW-001 / INV-WITHDRAW-002** — `ust1-window/src/state.rs` + `treasury.rs` / `contract.rs` (InstantWithdrawCw20; burn-then-pull atomicity) ([#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20))
 - **INV-LIMIT-NATIVE-001** — `cmm-native-wrap/src/state.rs` / `limits.rs`, enforced in `wrap.rs` and `unwrap.rs`
