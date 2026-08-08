@@ -41,8 +41,9 @@ pub(crate) fn parse_wasm_smart_query_data<T: serde::de::DeserializeOwned>(
                 .wrap_err("wasm smart query data: invalid base64")?;
             serde_json::from_slice(&raw).wrap_err("wasm smart query data: JSON decode after base64")
         }
-        serde_json::Value::Object(_) => serde_json::from_value(data.clone())
-            .wrap_err("wasm smart query data: JSON object decode"),
+        serde_json::Value::Object(_) => serde_json::from_value(data.clone()).map_err(|e| {
+            eyre!("wasm smart query data: JSON object decode: {e} (body={data})")
+        }),
         other => Err(eyre!(
             "wasm smart query data: expected base64 string or JSON object, got {}",
             match other {
@@ -722,6 +723,21 @@ mod tests {
         let data = serde_json::to_value(&st).unwrap();
         let parsed: StateResponse = parse_wasm_smart_query_data(&data).unwrap();
         assert_eq!(parsed.rate, st.rate);
+        assert_eq!(parsed.last_update_sec, 0);
+        assert!(!parsed.paused);
+    }
+
+    #[test]
+    fn parse_wasm_smart_data_accepts_mainnet_11549_state_without_paused() {
+        // Live columbus-5 code 11549 State omits `paused` (only on Config until oracle migrate).
+        let data = json!({
+            "rate": "1000000000000000000",
+            "last_update_sec": 0,
+            "utc_day_id": 20664,
+            "day_baseline_rate": "1000000000000000000"
+        });
+        let parsed: StateResponse = parse_wasm_smart_query_data(&data).unwrap();
+        assert_eq!(parsed.rate.u128(), 1_000_000_000_000_000_000);
         assert_eq!(parsed.last_update_sec, 0);
         assert!(!parsed.paused);
     }

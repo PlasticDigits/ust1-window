@@ -53,6 +53,11 @@ pub struct StateResponse {
     /// Mirrors `Config.paused` so window readers fail closed without a second query.
     /// **INV-ORACLE-PAUSE-001**: when `true`, consumers must reject swaps immediately
     /// (do not wait for `max_oracle_age_sec` staleness).
+    ///
+    /// `default` keeps readers compatible with mainnet code **11549**, which omitted this
+    /// field before the circuit-breaker surface landed (missing → `false`). Migrate oracle
+    /// wasm so pause is visible on `State` for window fail-closed.
+    #[serde(default)]
     pub paused: bool,
 }
 
