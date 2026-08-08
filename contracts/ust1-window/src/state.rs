@@ -12,6 +12,8 @@ fn default_max_oracle_age_sec() -> u64 {
 /// # Invariants
 ///
 /// - **INV-LIMIT-001**: UST1 notional per swap and per rolling window must respect governance caps.
+/// - **INV-ORACLE-PAUSE-001**: Deposit and withdraw both reject when oracle `State.paused` is true
+///   (circuit breaker; do not wait for staleness) — see `ensure_oracle_usable` (GitLab #22).
 /// - **INV-WITHDRAW-001**: Withdraws pull vFDUSD via treasury `InstantWithdrawCw20` (registered
 ///   spender); no CW20 allowance / `TransferFrom` on the happy path.
 /// - **INV-WITHDRAW-002**: UST1 `Burn` and treasury `InstantWithdrawCw20` are emitted in the same

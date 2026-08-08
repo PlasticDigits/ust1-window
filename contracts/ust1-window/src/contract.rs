@@ -53,11 +53,19 @@ fn validate_max_oracle_age_sec(max_age_sec: u64) -> Result<(), ContractError> {
     Ok(())
 }
 
-fn ensure_oracle_fresh(
+/// Fail closed when the oracle is unusable for pricing.
+///
+/// Order: circuit-breaker pause (**INV-ORACLE-PAUSE-001**) before age checks so a
+/// still-fresh `last_update_sec` cannot keep minting/redeeming after governance
+/// trips the oracle pause (audit C-2 / GitLab #22).
+fn ensure_oracle_usable(
     env: &Env,
     oracle_state: &ust1_oracle::msg::StateResponse,
     max_oracle_age_sec: u64,
 ) -> Result<(), ContractError> {
+    if oracle_state.paused {
+        return Err(ContractError::OraclePaused {});
+    }
     if oracle_state.last_update_sec == 0 {
         return Err(ContractError::OracleStale {});
     }
@@ -190,7 +198,7 @@ fn deposit(
         return Err(ContractError::InvalidCw20Hook {});
     }
     let oracle_state = query_oracle_state(deps.as_ref(), &cfg.oracle)?;
-    ensure_oracle_fresh(&env, &oracle_state, cfg.max_oracle_age_sec)?;
+    ensure_oracle_usable(&env, &oracle_state, cfg.max_oracle_age_sec)?;
     let rate = oracle_state.rate;
     let ust1_out = ust1_common::math::deposit_vfdusd_to_ust1(amount_vfdusd, rate, cfg.fee_bps)?;
 
@@ -244,7 +252,7 @@ fn withdraw(
     };
 
     let oracle_state = query_oracle_state(deps.as_ref(), &cfg.oracle)?;
-    ensure_oracle_fresh(&env, &oracle_state, cfg.max_oracle_age_sec)?;
+    ensure_oracle_usable(&env, &oracle_state, cfg.max_oracle_age_sec)?;
     let rate = oracle_state.rate;
     let v_out = ust1_common::math::withdraw_gross_ust1_to_vfdusd(gross_ust1, rate, cfg.fee_bps)?;
     if v_out < min_out {

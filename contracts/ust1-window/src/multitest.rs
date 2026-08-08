@@ -1,6 +1,6 @@
 //! cw-multi-test coverage for **INV-LIMIT-001**, **INV-SWAP-001**, **INV-WITHDRAW-001/002**,
-//! pause/ACL, and failure paths. Uses a stub treasury that accepts `InstantWithdrawCw20`
-//! (no CW20 allowance).
+//! **INV-ORACLE-PAUSE-001**, pause/ACL, and failure paths. Uses a stub treasury that accepts
+//! `InstantWithdrawCw20` (no CW20 allowance).
 
 use cosmwasm_std::{
     to_json_binary, Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response as CwResponse,
@@ -132,6 +132,7 @@ struct TestEnv {
     treasury: Addr,
     vfdusd: Addr,
     ust1: Addr,
+    oracle: Addr,
     window: Addr,
     window_code_id: u64,
 }
@@ -269,6 +270,7 @@ fn setup_with_treasury(reject_pulls: bool) -> TestEnv {
         treasury,
         vfdusd,
         ust1,
+        oracle,
         window,
         window_code_id: window_id,
     }
@@ -822,6 +824,279 @@ fn stale_oracle_blocks_deposit() {
         .unwrap_err();
     assert!(
         err.root_cause().to_string().contains("stale"),
+        "unexpected: {err}"
+    );
+}
+
+/// **INV-ORACLE-PAUSE-001**: oracle pause fails closed while rate is still age-fresh.
+#[test]
+fn oracle_paused_blocks_deposit_and_withdraw_while_rate_fresh() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        treasury,
+        vfdusd,
+        ust1,
+        oracle,
+        window,
+        ..
+    } = setup();
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(10_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    // Seed inventory + UST1 via a successful deposit before tripping the breaker.
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: Uint128::from(1_000_000u128),
+            msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+    let ust1_bal = cw20_balance(&app, &ust1, &user);
+    assert!(ust1_bal > Uint128::zero());
+    assert!(cw20_balance(&app, &vfdusd, &treasury) > Uint128::zero());
+
+    let st_before: oracle_msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(&oracle, &oracle_msg::QueryMsg::State {})
+        .unwrap();
+    assert!(!st_before.paused);
+    // Rate is still fresh by age (no block time advance).
+    assert!(st_before.last_update_sec > 0);
+
+    app.execute_contract(
+        owner.clone(),
+        oracle.clone(),
+        &oracle_msg::ExecuteMsg::SetPaused { paused: true },
+        &[],
+    )
+    .unwrap();
+
+    let st_paused: oracle_msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(&oracle, &oracle_msg::QueryMsg::State {})
+        .unwrap();
+    assert!(st_paused.paused);
+    assert_eq!(st_paused.last_update_sec, st_before.last_update_sec);
+
+    let dep_err = app
+        .execute_contract(
+            user.clone(),
+            vfdusd.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: Uint128::from(100_000u128),
+                msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        dep_err.root_cause().to_string().contains("oracle is paused"),
+        "deposit unexpected: {dep_err}"
+    );
+
+    let wd_err = app
+        .execute_contract(
+            user.clone(),
+            ust1.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: ust1_bal,
+                msg: to_json_binary(&Cw20HookMsg::Withdraw {
+                    min_vfdusd_out: Uint128::zero(),
+                })
+                .unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        wd_err.root_cause().to_string().contains("oracle is paused"),
+        "withdraw unexpected: {wd_err}"
+    );
+
+    // Unpause restores swaps (rate still fresh).
+    app.execute_contract(
+        owner.clone(),
+        oracle.clone(),
+        &oracle_msg::ExecuteMsg::SetPaused { paused: false },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: Uint128::from(100_000u128),
+            msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let ust1_after = cw20_balance(&app, &ust1, &user);
+    app.execute_contract(
+        user,
+        ust1,
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: ust1_after,
+            msg: to_json_binary(&Cw20HookMsg::Withdraw {
+                min_vfdusd_out: Uint128::zero(),
+            })
+            .unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+}
+
+#[test]
+fn oracle_unpaused_but_stale_still_oracle_stale() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        oracle,
+        window,
+        ..
+    } = setup();
+
+    // Explicitly unpaused (default) — only age should reject.
+    let cfg: oracle_msg::ConfigResponse = app
+        .wrap()
+        .query_wasm_smart(&oracle, &oracle_msg::QueryMsg::Config {})
+        .unwrap();
+    assert!(!cfg.paused);
+
+    let t = app.block_info().time.seconds();
+    app.update_block(|b| {
+        b.time = Timestamp::from_seconds(t + DEFAULT_MAX_ORACLE_AGE_SECS + 1);
+        b.height += 1;
+    });
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(1_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let err = app
+        .execute_contract(
+            user,
+            vfdusd,
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: Uint128::from(100_000u128),
+                msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("stale"),
+        "unexpected: {err}"
+    );
+}
+
+#[test]
+fn window_paused_still_blocks_when_oracle_unpaused() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        oracle,
+        window,
+        ..
+    } = setup();
+
+    let st: oracle_msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(&oracle, &oracle_msg::QueryMsg::State {})
+        .unwrap();
+    assert!(!st.paused);
+
+    app.execute_contract(
+        owner.clone(),
+        window.clone(),
+        &ExecuteMsg::SetPaused { paused: true },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(1_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let err = app
+        .execute_contract(
+            user,
+            vfdusd,
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: Uint128::from(100_000u128),
+                msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    // Window-local pause (not oracle circuit breaker).
+    assert!(
+        err.root_cause().to_string().contains("contract is paused"),
+        "unexpected: {err}"
+    );
+}
+
+#[test]
+fn oracle_set_paused_governance_only() {
+    let TestEnv {
+        mut app,
+        oracle,
+        ..
+    } = setup();
+
+    let stranger = Addr::unchecked("stranger");
+    let err = app
+        .execute_contract(
+            stranger,
+            oracle,
+            &oracle_msg::ExecuteMsg::SetPaused { paused: true },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("unauthorized"),
         "unexpected: {err}"
     );
 }

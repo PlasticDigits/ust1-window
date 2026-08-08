@@ -85,6 +85,16 @@ async fn run_once(
         .query_wasm_smart(&cfg.oracle_contract, &QueryMsg::State {})
         .await?;
 
+    // INV-ORACLE-PAUSE-001: governance circuit breaker — do not burn fees on UpdateRate.
+    // Service does not auto-unpause; ops use DEPLOYMENT emergency pause runbook (#22).
+    if state.paused {
+        warn!(
+            event = "oracle_paused",
+            "on-chain oracle is paused (circuit breaker); skipping UpdateRate"
+        );
+        return Ok(());
+    }
+
     if proposed == state.rate {
         info!("no rate change from BSC");
         return Ok(());

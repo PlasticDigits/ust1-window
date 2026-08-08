@@ -24,6 +24,44 @@ The oracle service applies the **same** rate policy as the chain before broadcas
 - **INV-ORACLE-THROTTLE-001** — minimum interval between on-chain updates (4h).
 - **INV-ORACLE-DAILY-001** — UTC calendar-day increase cap (2%).
 - **INV-ORACLE-MONO-001** — monotonic non-decreasing on-chain rate.
+- **INV-ORACLE-PAUSE-001** — when oracle `paused=true`, `UpdateRate` is blocked and **all** windows reading that oracle reject deposit/withdraw immediately (circuit breaker; do not wait for `max_oracle_age_sec`). See [Emergency pause](#emergency-pause-oracle-circuit-breaker-vs-window) ([GitLab #22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22); audit C-2 #1). Agent skill: [`skills/oracle-circuit-breaker`](../skills/oracle-circuit-breaker/SKILL.md).
+
+---
+
+## Emergency pause (oracle circuit breaker vs window)
+
+Prefer the **oracle** pause to freeze every window that trusts that oracle. Use the **window** pause only for a single market.
+
+| Action | Who | Effect | When |
+|--------|-----|--------|------|
+| Oracle `SetPaused { paused: true }` | **Governance only** | Blocks `UpdateRate`; `State.paused=true`; windows fail with `OraclePaused` on deposit **and** withdraw (even if rate is still age-fresh) | Suspected vFDUSD / Venus / bridge economic collapse; oracle-service detects a rate **decrease** it cannot mark on-chain |
+| Oracle `SetPaused { paused: false }` | **Governance only** | Resumes updates + window swaps (subject to freshness / limits) | After incident review; rate policy still monotonic — no emergency rate-down in this path |
+| Window `SetPaused` | Window governance | Pauses that window only | Local maintenance / single-window incident |
+
+**Ops steps (oracle circuit breaker):**
+
+```bash
+# Confirm pause surface (after migrate that includes State.paused)
+terrad query wasm contract-state smart "$ORACLE_ADDR" '{"config":{}}' \
+  --chain-id columbus-5 --node "$TERRA_RPC"
+terrad query wasm contract-state smart "$ORACLE_ADDR" '{"state":{}}' \
+  --chain-id columbus-5 --node "$TERRA_RPC"
+# expect paused: true/false on both
+
+# Trip breaker (governance key)
+terrad tx wasm execute "$ORACLE_ADDR" \
+  '{"set_paused":{"paused":true}}' \
+  --from "$GOVERNANCE_KEY" \
+  --chain-id columbus-5 --node "$TERRA_RPC" \
+  --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
+  --keyring-backend file --broadcast-mode sync -y
+
+# Smoke: window deposit/withdraw should revert with oracle paused (not wait ~6h staleness)
+```
+
+**Migrate note:** Deploy/migrate **oracle then window** (or same release) so `State` includes `paused` and the window enforces `OraclePaused`. Storage layout is unchanged (pause already lived in oracle `Config`); `State.paused` is an additive query field.
+
+**Out of scope here:** emergency rate reset / monotonic bypass; operator auto-trip; spot-vs-`exchangeRateStored` alerter (remaining C-2 items).
 
 ---
 
@@ -559,6 +597,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-08-08 | Oracle circuit breaker: `State.paused` + window fail-closed (`OraclePaused`); emergency pause runbook ([issue #22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22); audit C-2 #1). |
 | 2026-08-08 | Window withdraw = treasury `InstantWithdrawCw20` (Option 3); Phase 5 ops = migrate window + `SetCw20Spender`/`limit_24h` ([issue #20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20); depends on ustr-cmm #6/#7). |
 | 2026-07-30 | Mainnet CW20s live: **vFDUSD** `terra1mnl9…svj3`, **UST1** `terra1f0eq…fy72` (code **10184**); registry + README updated ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-07-30 | Phase 2/3 operator runbook: code id **10184**, known deployer/gov/BSC addresses, Venus vFDUSD **LockUnlock** + Terra **mint_burn**, decimals Terra 6 / BSC 8 ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |

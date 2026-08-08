@@ -50,6 +50,10 @@ pub struct StateResponse {
     pub last_update_sec: u64,
     pub utc_day_id: u64,
     pub day_baseline_rate: Uint128,
+    /// Mirrors `Config.paused` so window readers fail closed without a second query.
+    /// **INV-ORACLE-PAUSE-001**: when `true`, consumers must reject swaps immediately
+    /// (do not wait for `max_oracle_age_sec` staleness).
+    pub paused: bool,
 }
 
 #[cw_serde]

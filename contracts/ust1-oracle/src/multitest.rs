@@ -68,6 +68,92 @@ fn inv_oracle_mono_update_success_within_cap() {
         .query_wasm_smart(oracle, &QueryMsg::State {})
         .unwrap();
     assert_eq!(st.rate, bump);
+    assert!(!st.paused);
+}
+
+#[test]
+fn state_surfaces_paused_flag_for_circuit_breaker() {
+    // **INV-ORACLE-PAUSE-001**: State.paused mirrors Config so window readers fail closed.
+    let mut app = App::default();
+    let gov = Addr::unchecked("gov");
+    let bot = Addr::unchecked("bot");
+    let code = app.store_code(oracle_contract());
+    let initial = Uint128::from(RATE_SCALE);
+    let oracle = app
+        .instantiate_contract(
+            code,
+            gov.clone(),
+            &InstantiateMsg {
+                governance: gov.to_string(),
+                oracle_operator: bot.to_string(),
+                initial_rate: initial,
+            },
+            &[],
+            "oracle",
+            None,
+        )
+        .unwrap();
+
+    let st0: crate::msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(&oracle, &QueryMsg::State {})
+        .unwrap();
+    assert!(!st0.paused);
+
+    app.execute_contract(
+        gov.clone(),
+        oracle.clone(),
+        &ExecuteMsg::SetPaused { paused: true },
+        &[],
+    )
+    .unwrap();
+
+    let st1: crate::msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(&oracle, &QueryMsg::State {})
+        .unwrap();
+    assert!(st1.paused);
+
+    let stranger = Addr::unchecked("stranger");
+    let err = app
+        .execute_contract(
+            stranger,
+            oracle.clone(),
+            &ExecuteMsg::SetPaused { paused: false },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("unauthorized"),
+        "unexpected: {err}"
+    );
+
+    // Operator may UpdateRate when unpaused, but must never trip/clear the breaker.
+    let err_bot = app
+        .execute_contract(
+            bot,
+            oracle.clone(),
+            &ExecuteMsg::SetPaused { paused: false },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err_bot.root_cause().to_string().contains("unauthorized"),
+        "operator must not SetPaused: {err_bot}"
+    );
+
+    app.execute_contract(
+        gov,
+        oracle.clone(),
+        &ExecuteMsg::SetPaused { paused: false },
+        &[],
+    )
+    .unwrap();
+    let st2: crate::msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(oracle, &QueryMsg::State {})
+        .unwrap();
+    assert!(!st2.paused);
 }
 
 #[test]
