@@ -186,7 +186,7 @@ export CW20_MINTABLE_CODE_ID="10184"
 export ORACLE_ADDR="terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n"
 export WINDOW_ADDR="terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2"
 export CMM_TREASURY="terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2"
-export UST1_ORACLE_CODE_ID="11549"
+export UST1_ORACLE_CODE_ID="11568"          # Venus bootstrap + State.paused (was 11549 → 11567 → 11568)
 export UST1_WINDOW_CODE_ID="11566"          # InstantWithdrawCw20 (was 11550 at instantiate)
 
 export BSC_RPC="https://bsc-dataseed1.binance.org"
@@ -239,15 +239,16 @@ Venus vFDUSD on BSC is **LockUnlock** (`registerToken` type **`0`**). Terra CW20
 ### UST1 stack (this repo)
 
 - [x] `make build-optimized` for InstantWithdrawCw20 window wasm (sha256 `469e0b9f…ebc9`).
-- [x] `wasm store` InstantWithdraw `ust1_window.wasm` → code id **11566** (tx `AA40BE6A…037E`); oracle store remains **11549**.
-- [x] Instantiate **`ust1-oracle`** — `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` (code **11549**).
+- [x] `wasm store` InstantWithdraw `ust1_window.wasm` → code id **11566** (tx `AA40BE6A…037E`).
+- [x] Instantiate **`ust1-oracle`** — `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` (originally code **11549**).
 - [x] Instantiate **`ust1-window`** — `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` (originally code **11550**; approved fee/limits; default CMM treasury).
 - [x] **Migrate window** to InstantWithdrawCw20 code **11566** (tx `5C2A5CAF…1227`; admin `cl8y2_admin` / `terra1xsecn…`).
+- [x] **Migrate oracle** to Venus-bootstrap code **11568** (store tx `E8116018…1265`; prior interim **11567**).
 - [x] **UST1 minters:** window `terra1zxwp…` is in UST1 `minters` (governance self-mint cleanup / INV-MINTER-001 still optional).
 - [x] **Treasury / withdraw inventory (Option 3):** treasury code **11564**; `SetCw20Spender` + `limit_24h=10000000000` for vFDUSD → window (see Phase 5). Schema pin / CI: [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21).
-- [ ] **Pre-announce:** schema conformance green at pin rev; **live withdraw probe** tx recorded (Phase 5 §2 step 4) — needs treasury vFDUSD inventory + first `UpdateRate`.
+- [ ] **Pre-announce:** schema conformance green at pin rev; **live withdraw probe** tx recorded (Phase 5 §2 step 4) — needs treasury vFDUSD inventory.
 - [ ] **Governance handoff:** if required, run `ProposeGovernance` / `AcceptGovernance` on oracle and window.
-- [ ] **First oracle commit:** `oracle_operator` sends `UpdateRate` consistent with policy (service will continue updates).
+- [x] **First oracle commit:** Venus-normalized `UpdateRate` seeded **2026-08-08 11:04:37 UTC** (`rate=1225104516022056627`, `last_update_sec=1786187077`).
 
 ### Optional: `cmm-native-wrap`
 
@@ -603,10 +604,20 @@ R = exchangeRateStored / 10^(underlyingDecimals - vTokenDecimals)
 
 `ust1-oracle-service` performs this normalization (do **not** post the raw mantissa).
 
-**Bootstrap:** instantiate used `initial_rate = 1e18`. Live Venus is ~`1.225e18` (+22%), which exceeds the +2% daily cap. Oracle policy therefore **skips the daily cap when `last_update_sec == 0`** and seeds `day_baseline_rate = new_rate`. Migrate oracle wasm that includes this bootstrap before the first ops `UpdateRate`.
+**Bootstrap:** instantiate used `initial_rate = 1e18`. Live Venus is ~`1.225e18` (+22%), which exceeds the +2% daily cap. Oracle policy therefore **skips the daily cap when `last_update_sec == 0`** and seeds `day_baseline_rate = new_rate`. Requires oracle code **≥ 11568**.
+
+**Mainnet seed (done):**
+
+| Field | Value |
+|-------|--------|
+| Venus rate fetched | **2026-08-08 11:04:37 UTC** (`last_update_sec=1786187077`) |
+| Normalized `R` | `1225104516022056627` (~**1.225104516** FDUSD per vFDUSD) |
+| `day_baseline_rate` | same as `R` |
+| Oracle code | **11568** (store `E8116018…1265`) |
+| Operator key | `ust1-window-oracle-bot` → `terra1hm3ph…` |
 
 ```bash
-# Live R (recompute at send time)
+# Live R (recompute at send time; bootstrap already done on mainnet)
 NEW_RATE=$(cast call 0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba \
   "exchangeRateStored()(uint256)" --rpc-url https://bsc-dataseed1.binance.org \
   | python3 -c 'import sys; print(int(sys.stdin.read().strip(),0)//10**10)')
@@ -619,7 +630,7 @@ terrad tx wasm execute "$ORACLE_ADDR" \
   --keyring-backend file --broadcast-mode sync -y
 ```
 
-After inclusion, `state.last_update_sec > 0`, `rate ≈ 1.225e18`, and Coolify continues under the normal +2%/4h policy.
+Coolify continues under the normal +2%/4h policy after this seed.
 
 ---
 
@@ -628,7 +639,7 @@ After inclusion, `state.last_update_sec > 0`, `rate ≈ 1.225e18`, and Coolify c
 `ust1-oracle-service` is a **long-running process** with structured logs. It exposes a minimal **liveness** HTTP endpoint (`GET /healthz`) for platform health checks; there is no metrics API.
 
 **Mainnet operator** (must match `TERRA_MNEMONIC`): `terra1hm3ph0jevtkuc9efj9q3ld3ktk3g6la3ruhqna`  
-**Oracle contract:** `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` (code **11549**).
+**Oracle contract:** `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` (code **11568**).
 
 ### Coolify (recommended)
 
@@ -737,7 +748,7 @@ Treat mainnet addresses as **recorded-at-deploy**: store code id, tx hashes, and
 | cw20-mintable | | **10184** | — | Already stored |
 | vFDUSD cw20 | live | 10184 | `terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3` | Minter = bridge; decimals 6; tx `48D01D2D…1F02` |
 | UST1 cw20 | live | 10184 | `terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72` | Minter = governance `terra1xsecn…`; decimals 6; tx `2A5970A8…3EAF` |
-| `ust1-oracle` | live | **11549** | `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` | Operator `terra1hm3ph0jevtkuc9efj9q3ld3ktk3g6la3ruhqna`; tx `EFA79773…355E` |
+| `ust1-oracle` | live | **11568** | `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` | Operator `terra1hm3ph…`; instantiate tx `EFA79773…355E` (code 11549); bootstrap migrate store `E8116018…1265`; Venus seed **2026-08-08 11:04:37 UTC** `R=1225104516022056627` (~1.225 FDUSD/vFDUSD) |
 | `ust1-window` | live | **11566** | `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` | InstantWithdrawCw20; fee_bps=100; per-tx 1000 / 24h 10000 UST1; instantiate tx `9F078327…224C` (code 11550); store `AA40BE6A…037E`; migrate `5C2A5CAF…1227`; wasm sha256 `469e0b9f…ebc9` |
 | CMM treasury (ustr-cmm) | live | **11564** | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | Contract; window spender + `limit_24h=10000000000`; gov `terra1xsecn…` |
 | Terra deployer (`cl8ydeploy`) | — | — | `terra1hu4zggf3f8yw6jw3rxrjxn2drwad675gq5k2lv` | Code **10184** creator |
@@ -776,6 +787,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-08-08 | Mainnet oracle **11568** + first Venus-normalized rate `1225104516022056627` seeded **2026-08-08 11:04:37 UTC** (`last_update_sec=1786187077`); store `E8116018…1265` ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-08-08 | Oracle bootstrap: first `UpdateRate` (`last_update_sec==0`) skips daily cap and seeds Venus-normalized `R`; oracle-service divides `exchangeRateStored` by `10^(uDec-vDec)` ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-08-08 | Root [`Dockerfile`](../Dockerfile) + [`.dockerignore`](../.dockerignore) for `ust1-oracle-service` Coolify/Docker deploy; Coolify runbook in this doc ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-08-08 | Mainnet window migrate to InstantWithdrawCw20 code **11566** (store `AA40BE6A…037E`, migrate `5C2A5CAF…1227`); registry/README; ops note for `--gas-prices 28.325uluna` + password-locked `cl8y2_admin` ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19) Phase 5 / [#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20)). |
