@@ -25,6 +25,15 @@ The oracle service applies the **same** rate policy as the chain before broadcas
 - **INV-ORACLE-DAILY-001** — UTC calendar-day increase cap (2%).
 - **INV-ORACLE-MONO-001** — monotonic non-decreasing on-chain rate.
 
+Ops timing vs window staleness ([glab #24](https://gitlab.com/PlasticDigits/ust1-window/-/issues/24) / audit H-3; skill [`skills/oracle-ops-poll-silence`](../skills/oracle-ops-poll-silence/SKILL.md)):
+
+- **INV-ORACLE-OPS-POLL-001** — default poll (**3600 s**) ≪ window `DEFAULT_MAX_ORACLE_AGE_SECS` (**21600 s**).
+- **INV-ORACLE-OPS-SILENCE-001** — default silence (**21600 s**) ≤ window max oracle age (chosen formula: `silence = max_oracle_age`; audit also allows `max_age + poll` only when `poll ≪ max_age`).
+- Prefer: `poll < max_oracle_age` and `silence ≤ max_oracle_age` (page at or before user impact).
+- On-chain throttle / daily / mono policy are **unchanged**; frequent polls are mostly no-ops when within band.
+- The service does **not** read live on-chain `max_oracle_age_sec`; if governance changes it, retune env. Startup logs `ORACLE_OPS_TIMING_MISCONFIG` for common footguns (does not hard-fail).
+- Until confirm-before-liveness (C-3 / [#23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)), silence still keys off CheckTx accept — do not treat H-3 alone as full liveness correctness.
+
 ---
 
 ## Terra Classic CLI (`terrad`): gas, fees, and common mistakes
@@ -177,7 +186,9 @@ Venus vFDUSD on BSC is **LockUnlock** (`registerToken` type **`0`**). Terra CW20
 
 - [ ] Create Render resources via **dashboard** (see [Render dashboard setup](#render-dashboard-setup-no-renderyaml)).
 - [ ] Set **all** env vars; run `scripts/verify_oracle_operator_env.sh` locally with the same values before applying.
-- [ ] Confirm logs show periodic polls and successful broadcasts after deploy.
+- [ ] Confirm `POLL_INTERVAL_SECS` ≪ on-chain / intended `max_oracle_age_sec` (default poll **3600**, window default age **21600**).
+- [ ] Confirm `ORACLE_MAX_SILENCE_SECS` ≤ `max_oracle_age` (default **21600**); avoid silence ≫ `max_age + poll`.
+- [ ] Confirm logs show `poll_interval_secs` / `max_silence_since_broadcast_secs` at startup, then periodic polls and successful broadcasts after deploy.
 - [ ] External alerting on process restarts / log errors (Render notifications + optional log drain).
 
 ---
@@ -472,14 +483,14 @@ Until `last_update_sec` is set by a successful `UpdateRate`, window swaps may re
 ### Health / alerting
 
 - Enable Render **notifications** for **crashes and deploy failures**.
-- The binary emits **`error!`** if no successful broadcast exceeds `ORACLE_MAX_SILENCE_SECS` — forward logs to your SIEM or log drain and page on that pattern.
+- The binary emits **`error!`** if no successful broadcast exceeds `ORACLE_MAX_SILENCE_SECS` (default **21600** s) — forward logs to your SIEM or log drain and page on that pattern (`LIVENESS_ORACLE_NO_BROADCAST`). Also watch startup **`ORACLE_OPS_TIMING_MISCONFIG`** warnings.
 - Do **not** rely on Render’s HTTP health check for this binary unless you add an HTTP probe.
 
 ---
 
 ## Oracle service environment
 
-Loaded in [`Config::from_env`](../oracle-service/src/config.rs):
+Loaded in [`Config::from_env`](../oracle-service/src/config.rs). Timing defaults implement **INV-ORACLE-OPS-POLL-001** / **INV-ORACLE-OPS-SILENCE-001** ([#24](https://gitlab.com/PlasticDigits/ust1-window/-/issues/24)); agent skill: [`skills/oracle-ops-poll-silence`](../skills/oracle-ops-poll-silence/SKILL.md).
 
 | Variable | Purpose |
 |----------|---------|
@@ -491,8 +502,18 @@ Loaded in [`Config::from_env`](../oracle-service/src/config.rs):
 | `TERRA_CHAIN_ID` | `columbus-5` on mainnet. |
 | `TERRA_MNEMONIC` | Oracle operator seed (**secret**). |
 | `ORACLE_CONTRACT` | `ust1-oracle` address. |
-| `POLL_INTERVAL_SECS` | Default 21600 s. |
-| `ORACLE_MAX_SILENCE_SECS` | Loud log if no successful broadcast (default 28800 s). |
+| `POLL_INTERVAL_SECS` | Default **3600** s (1h). Keep ≪ window `max_oracle_age_sec` (default 21600). Do not set to 21600 — zero missed-tick margin (H-3 / #24). |
+| `ORACLE_MAX_SILENCE_SECS` | Loud log if no successful broadcast (default **21600** s). Prefer ≤ window max oracle age; documented grace ≤ `max_age + poll`. |
+
+**Production relationship:**
+
+```text
+poll < max_oracle_age                 # default 3600 < 21600
+silence ≤ max_oracle_age              # preferred (default 21600)
+silence ≤ max_oracle_age + poll       # documented grace ceiling
+```
+
+Env overrides remain supported; mis-sets that violate the relationship log `ORACLE_OPS_TIMING_MISCONFIG` at startup (and advisories from `scripts/verify_oracle_operator_env.sh`) but do not hard-fail — operator responsibility if on-chain `max_oracle_age_sec` was customized.
 
 **HTTPS:** production must use `https://`. Local-only: `DEV_ALLOW_HTTP=1` for loopback (see `config.rs`).
 
