@@ -590,9 +590,36 @@ terrad query wasm contract-state smart "$CMM_TREASURY" \
 
 **Policy note:** Window per-tx / 24h UST1 limits remain the user-facing product caps; treasury `limit_24h` is a hard ceiling (defense in depth).
 
-### 3) First oracle rate
+### 3) First oracle rate (Venus-normalized vFDUSD→FDUSD)
 
-Until `last_update_sec` is set by a successful `UpdateRate`, window swaps may reject stale oracle state. Bring rate on-chain from **`ORACLE_BOT_ADDR`** (or rely on the service once live).
+Until `last_update_sec` is set by a successful `UpdateRate`, window swaps reject as `OracleStale`.
+
+**Rate units:** on-chain `R` uses `RATE_SCALE = 1e18` so `R/1e18` = FDUSD per 1 vFDUSD. Venus `exchangeRateStored` is a mantissa; normalize before posting:
+
+```text
+R = exchangeRateStored / 10^(underlyingDecimals - vTokenDecimals)
+  # FDUSD=18, vToken=8  ⇒  R = exchangeRateStored / 1e10
+```
+
+`ust1-oracle-service` performs this normalization (do **not** post the raw mantissa).
+
+**Bootstrap:** instantiate used `initial_rate = 1e18`. Live Venus is ~`1.225e18` (+22%), which exceeds the +2% daily cap. Oracle policy therefore **skips the daily cap when `last_update_sec == 0`** and seeds `day_baseline_rate = new_rate`. Migrate oracle wasm that includes this bootstrap before the first ops `UpdateRate`.
+
+```bash
+# Live R (recompute at send time)
+NEW_RATE=$(cast call 0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba \
+  "exchangeRateStored()(uint256)" --rpc-url https://bsc-dataseed1.binance.org \
+  | python3 -c 'import sys; print(int(sys.stdin.read().strip(),0)//10**10)')
+
+terrad tx wasm execute "$ORACLE_ADDR" \
+  '{"update_rate":{"new_rate":"'"$NEW_RATE"'"}}' \
+  --from ust1-window-oracle-bot \
+  --chain-id columbus-5 --node "$TERRA_RPC" \
+  --gas auto --gas-adjustment 1.5 --gas-prices 28.325uluna \
+  --keyring-backend file --broadcast-mode sync -y
+```
+
+After inclusion, `state.last_update_sec > 0`, `rate ≈ 1.225e18`, and Coolify continues under the normal +2%/4h policy.
 
 ---
 
@@ -749,6 +776,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-08-08 | Oracle bootstrap: first `UpdateRate` (`last_update_sec==0`) skips daily cap and seeds Venus-normalized `R`; oracle-service divides `exchangeRateStored` by `10^(uDec-vDec)` ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-08-08 | Root [`Dockerfile`](../Dockerfile) + [`.dockerignore`](../.dockerignore) for `ust1-oracle-service` Coolify/Docker deploy; Coolify runbook in this doc ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-08-08 | Mainnet window migrate to InstantWithdrawCw20 code **11566** (store `AA40BE6A…037E`, migrate `5C2A5CAF…1227`); registry/README; ops note for `--gas-prices 28.325uluna` + password-locked `cl8y2_admin` ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19) Phase 5 / [#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20)). |
 | 2026-08-08 | Post-merge coverage gaps ([#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28)): M-8 minter integration, BSC hang, SIGTERM hook, equal-rate/policy-skip liveness, pause integration, TEST-16 LocalTerra gated smoke + docs. |

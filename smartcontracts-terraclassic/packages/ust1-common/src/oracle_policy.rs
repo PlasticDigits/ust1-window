@@ -4,6 +4,8 @@
 //!
 //! - **INV-ORACLE-THROTTLE-001**: If `last_update_sec > 0`, then `now_sec - last_update_sec >= MIN_ORACLE_UPDATE_INTERVAL_SECS`.
 //! - **INV-ORACLE-DAILY-001**: After UTC day rollover, baseline resets; `new_rate <= day_baseline * (10000 + MAX_DAILY_INCREASE_BPS) / 10000`.
+//!   **Bootstrap:** when `last_update_sec == 0` (never updated), the daily cap is skipped so ops can
+//!   seed the live Venus-normalized rate; returned baseline becomes `new_rate`.
 //! - **INV-ORACLE-MONO-001**: `new_rate >= old_rate`.
 
 use cosmwasm_std::Uint128;
@@ -35,6 +37,8 @@ pub enum OraclePolicyError {
 }
 
 /// Validate a proposed oracle update (matches `ust1-oracle` contract).
+///
+/// Returns `(utc_day_id, day_baseline_rate)` to persist after a successful update.
 pub fn check_rate_update(
     now_sec: u64,
     last_update_sec: u64,
@@ -57,6 +61,13 @@ pub fn check_rate_update(
         return Err(OraclePolicyError::RateDecreased);
     }
     let (day_id, baseline) = roll_utc_day(now_sec, utc_day_id, day_baseline_rate, old_rate);
+
+    // First post-instantiate update: allow seeding the real Venus rate (may exceed +2%).
+    // Persist baseline = new_rate so later same-day caps are relative to the seeded level.
+    if last_update_sec == 0 {
+        return Ok((day_id, new_rate));
+    }
+
     let max_r =
         max_rate_after_daily_cap(baseline).map_err(|_| OraclePolicyError::DailyCapExceeded)?;
     if new_rate > max_r {
@@ -84,6 +95,33 @@ mod tests {
         let r = Uint128::new(crate::RATE_SCALE);
         let ok = check_rate_update(100, 0, r, r, 0, r);
         assert!(ok.is_ok());
+    }
+
+    /// Bootstrap: first update may jump above +2% daily cap; baseline becomes `new_rate`.
+    #[test]
+    fn first_update_skips_daily_cap_and_seeds_baseline() {
+        let old = Uint128::new(crate::RATE_SCALE);
+        // ~+22.5% (live Venus-normalized vFDUSD→FDUSD ≈ 1.225e18)
+        let new = Uint128::new(1_225_104_516_022_056_627);
+        let (day_id, baseline) = check_rate_update(1_700_000_000, 0, old, new, 0, old).unwrap();
+        assert_eq!(baseline, new);
+        assert_eq!(day_id, 1_700_000_000 / 86_400);
+        // After bootstrap, same-day +3% from seeded baseline is still capped.
+        let too_high = baseline
+            .checked_mul(Uint128::from(103u128))
+            .unwrap()
+            .checked_div(Uint128::from(100u128))
+            .unwrap();
+        let err = check_rate_update(
+            1_700_000_000 + crate::MIN_ORACLE_UPDATE_INTERVAL_SECS + 1,
+            1_700_000_000,
+            new,
+            too_high,
+            day_id,
+            baseline,
+        )
+        .unwrap_err();
+        assert_eq!(err, OraclePolicyError::DailyCapExceeded);
     }
 
     proptest! {

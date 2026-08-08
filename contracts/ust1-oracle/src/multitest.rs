@@ -288,6 +288,20 @@ fn inv_oracle_daily_cap_exceeded_same_utc_day() {
 
     let day_start = 86_400u64 * 10;
     set_time(&mut app, day_start + 100);
+    // Bootstrap first update (last_update_sec==0 skips daily cap) so later caps apply.
+    app.execute_contract(
+        bot.clone(),
+        oracle.clone(),
+        &ExecuteMsg::UpdateRate {
+            new_rate: initial,
+        },
+        &[],
+    )
+    .unwrap();
+    set_time(
+        &mut app,
+        day_start + 100 + ust1_common::MIN_ORACLE_UPDATE_INTERVAL_SECS + 1,
+    );
     let max_r = max_rate_after_daily_cap(initial).unwrap();
     let too_high = max_r.checked_add(Uint128::one()).unwrap();
 
