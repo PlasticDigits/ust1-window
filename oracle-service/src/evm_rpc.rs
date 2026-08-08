@@ -97,8 +97,7 @@ where
         (Ok(a), Err(e1)) => {
             if urls.len() < 3 {
                 return Err(e1.wrap_err(format!(
-                    "EVM RPC: only one successful provider (need 2 agreeing within 0.01%); first rate was {}",
-                    a
+                    "EVM RPC: only one successful provider (need 2 agreeing within 0.01%); first rate was {a}"
                 )));
             }
             tracing::warn!(error = %e1, "EVM RPC second endpoint failed; trying third");
@@ -110,16 +109,14 @@ where
                     c
                 )),
                 Err(e2) => Err(e2.wrap_err(format!(
-                    "EVM RPC: first succeeded ({}) but second and third failed",
-                    a
+                    "EVM RPC: first succeeded ({a}) but second and third failed"
                 ))),
             }
         }
         (Err(e0), Ok(b)) => {
             if urls.len() < 3 {
                 return Err(e0.wrap_err(format!(
-                    "EVM RPC: only one successful provider (need 2 agreeing within 0.01%); second rate was {}",
-                    b
+                    "EVM RPC: only one successful provider (need 2 agreeing within 0.01%); second rate was {b}"
                 )));
             }
             tracing::warn!(error = %e0, "EVM RPC first endpoint failed; trying third");
@@ -131,14 +128,13 @@ where
                     c
                 )),
                 Err(e2) => Err(e2.wrap_err(format!(
-                    "EVM RPC: second succeeded ({}) but first and third failed",
-                    b
+                    "EVM RPC: second succeeded ({b}) but first and third failed"
                 ))),
             }
         }
         (Err(e0), Err(e1)) => {
             if urls.len() < 3 {
-                return Err(e0.wrap_err(format!("EVM RPC: both first endpoints failed ({})", e1)));
+                return Err(e0.wrap_err(format!("EVM RPC: both first endpoints failed ({e1})")));
             }
             tracing::warn!(error = %e0, "EVM RPC first two endpoints failed; trying third");
             match read(urls[2].clone()).await {
@@ -146,8 +142,7 @@ where
                     "EVM RPC: need two successful providers agreeing within 0.01%; only the third endpoint responded"
                 )),
                 Err(e2) => Err(e2.wrap_err(format!(
-                    "EVM RPC: all of first three endpoints failed ({})",
-                    e1
+                    "EVM RPC: all of first three endpoints failed ({e1})"
                 ))),
             }
         }
