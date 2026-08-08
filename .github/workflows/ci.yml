@@ -29,3 +29,9 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test
+      - name: InstantWithdrawCw20 schema pin (ustr-cmm)
+        # Clones pinned PlasticDigits2/ustr-cmm rev and checks golden JSON + Rust conformance.
+        # Requires network for the git dep (issue #21 / INV-SCHEMA-001).
+        run: |
+          chmod +x scripts/verify_treasury_wire_schema.sh
+          scripts/verify_treasury_wire_schema.sh

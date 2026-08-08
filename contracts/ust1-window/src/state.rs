@@ -18,6 +18,8 @@ fn default_max_oracle_age_sec() -> u64 {
 ///   spender); no CW20 allowance / `TransferFrom` on the happy path.
 /// - **INV-WITHDRAW-002**: UST1 `Burn` and treasury `InstantWithdrawCw20` are emitted in the same
 ///   response (burn first); either failure reverts the tx.
+/// - **INV-SCHEMA-001**: `InstantWithdrawCw20` wire JSON must match pinned ustr-cmm treasury
+///   schema (`treasury::USTR_CMM_TREASURY_SCHEMA_REV`); see [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21) / audit C-1.
 #[cw_serde]
 pub struct Config {
     pub governance: Addr,

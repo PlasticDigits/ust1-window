@@ -28,8 +28,15 @@ cw-multi-test = "1.2.0"
 thiserror = "1.0.4"
 schemars = "0.8.15"
 serde = { version = "1.0.188", default-features = false, features = ["derive"] }
+serde_json = "1.0"
 ust1-common = { path = "smartcontracts-terraclassic/packages/ust1-common", version = "0.1.0" }
 ust1-cmm = { git = "https://gitlab.com/PlasticDigits/ust1-window.git", rev = "9623780189ba433122f43657f712a3492cf71341" }
+# Pinned PlasticDigits2/ustr-cmm treasury (InstantWithdrawCw20 schema authority).
+# Dev/test only — never add to ust1-window wasm production deps.
+# Keep in sync with `ust1_window::treasury::USTR_CMM_TREASURY_SCHEMA_REV`,
+# `contracts/ust1-window/testdata/instant_withdraw_cw20_golden.json`, and
+# `skills/window-instant-withdraw-cw20` / docs/DEPLOYMENT.md (#21 / audit C-1).
+cmm-treasury = { package = "treasury", git = "https://gitlab.com/PlasticDigits2/ustr-cmm.git", rev = "e6c4b7cf33f2f56d21c0e9fb2828efe87f032ded", default-features = false, features = ["library"] }
 ust1-oracle = { path = "contracts/ust1-oracle", version = "0.1.2", features = [
   "library",
 ] }

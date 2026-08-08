@@ -620,7 +620,6 @@ pub(crate) fn compute_fee_amount(gas_limit: u64, gas_price: f64) -> u128 {
     ((gas_limit as f64) * gas_price).ceil() as u128
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1174,6 +1173,9 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(signer.query_network_min_gas_price().await.unwrap(), Some(0.02));
+        assert_eq!(
+            signer.query_network_min_gas_price().await.unwrap(),
+            Some(0.02)
+        );
     }
 }

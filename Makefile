@@ -1,4 +1,4 @@
-.PHONY: start stop reset wait-healthy test-contracts build-optimized deploy-local verify-oracle-env install-hooks precommit help
+.PHONY: start stop reset wait-healthy test-contracts build-optimized deploy-local verify-oracle-env verify-treasury-wire install-hooks precommit help
 
 start:
 	docker compose up -d
@@ -32,6 +32,9 @@ deploy-local: wait-healthy
 verify-oracle-env:
 	bash scripts/verify_oracle_operator_env.sh
 
+verify-treasury-wire:
+	bash scripts/verify_treasury_wire_schema.sh
+
 install-hooks:
 	@command -v pre-commit >/dev/null || (echo "Install pre-commit: pip install pre-commit (or uv/pipx)"; exit 1)
 	pre-commit install
@@ -42,5 +45,6 @@ precommit:
 help:
 	@echo "make start | stop | reset | wait-healthy"
 	@echo "make test-contracts | build-optimized | deploy-local | verify-oracle-env"
+	@echo "make verify-treasury-wire   (ustr-cmm InstantWithdrawCw20 golden / issue #21)"
 	@echo "make install-hooks | precommit   (requires: pip install pre-commit)"
 	@echo "Deployment guide: docs/DEPLOYMENT.md"

@@ -1,0 +1,37 @@
+{
+  "ustr_cmm_repo": "https://gitlab.com/PlasticDigits2/ustr-cmm.git",
+  "ustr_cmm_rev": "e6c4b7cf33f2f56d21c0e9fb2828efe87f032ded",
+  "notes": "Canonical InstantWithdrawCw20 wire JSON produced by ustr-cmm treasury ExecuteMsg at the pinned rev (and by this window's TreasuryExecuteMsg subset). Refresh via scripts/verify_treasury_wire_schema.sh --regen after intentional pin bumps. Field order is recipient, token, amount (Rust struct declaration order).",
+  "cases": [
+    {
+      "name": "representative",
+      "canonical_json": "{\"instant_withdraw_cw20\":{\"recipient\":\"terra1user\",\"token\":\"terra1vfdusd\",\"amount\":\"42\"}}"
+    },
+    {
+      "name": "max_uint128",
+      "canonical_json": "{\"instant_withdraw_cw20\":{\"recipient\":\"terra1user\",\"token\":\"terra1vfdusd\",\"amount\":\"340282366920938463463374607431768211455\"}}"
+    }
+  ],
+  "negative_fixtures": [
+    {
+      "name": "renamed_field_receiver",
+      "json": "{\"instant_withdraw_cw20\":{\"receiver\":\"terra1user\",\"token\":\"terra1vfdusd\",\"amount\":\"42\"}}"
+    },
+    {
+      "name": "wrong_casing_variant",
+      "json": "{\"InstantWithdrawCw20\":{\"recipient\":\"terra1user\",\"token\":\"terra1vfdusd\",\"amount\":\"42\"}}"
+    },
+    {
+      "name": "unknown_extra_field",
+      "json": "{\"instant_withdraw_cw20\":{\"recipient\":\"terra1user\",\"token\":\"terra1vfdusd\",\"amount\":\"42\",\"memo\":\"x\"}}"
+    },
+    {
+      "name": "amount_as_number",
+      "json": "{\"instant_withdraw_cw20\":{\"recipient\":\"terra1user\",\"token\":\"terra1vfdusd\",\"amount\":42}}"
+    },
+    {
+      "name": "missing_token",
+      "json": "{\"instant_withdraw_cw20\":{\"recipient\":\"terra1user\",\"amount\":\"42\"}}"
+    }
+  ]
+}

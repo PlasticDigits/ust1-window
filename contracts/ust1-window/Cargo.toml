@@ -25,3 +25,6 @@ ust1-oracle = { workspace = true }
 [dev-dependencies]
 cw-multi-test = { workspace = true }
 cw20-mintable = { workspace = true }
+# Cross-repo InstantWithdrawCw20 schema authority (issue #21). Not linked into wasm.
+cmm-treasury = { workspace = true }
+serde_json = { workspace = true }

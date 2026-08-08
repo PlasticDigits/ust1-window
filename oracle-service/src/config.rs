@@ -243,7 +243,9 @@ impl Config {
             .and_then(|s| s.parse().ok())
             .unwrap_or(crate::terra_tx::DEFAULT_GAS_PRICE);
         if terra_gas_price <= 0.0 {
-            return Err(eyre!("TERRA_GAS_PRICE / TERRA_GAS_PRICE_ULUNA must be positive"));
+            return Err(eyre!(
+                "TERRA_GAS_PRICE / TERRA_GAS_PRICE_ULUNA must be positive"
+            ));
         }
         Ok(Config {
             bsc_rpc_urls,
@@ -336,8 +338,14 @@ mod tests {
     #[test]
     fn resolve_poll_defaults_and_overrides() {
         assert_eq!(resolve_poll_interval_secs(None), DEFAULT_POLL_INTERVAL_SECS);
-        assert_eq!(resolve_poll_interval_secs(Some("")), DEFAULT_POLL_INTERVAL_SECS);
-        assert_eq!(resolve_poll_interval_secs(Some("not-a-number")), DEFAULT_POLL_INTERVAL_SECS);
+        assert_eq!(
+            resolve_poll_interval_secs(Some("")),
+            DEFAULT_POLL_INTERVAL_SECS
+        );
+        assert_eq!(
+            resolve_poll_interval_secs(Some("not-a-number")),
+            DEFAULT_POLL_INTERVAL_SECS
+        );
         assert_eq!(resolve_poll_interval_secs(Some("1800")), 1_800);
     }
 

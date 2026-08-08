@@ -4,7 +4,7 @@ Monorepo for Terra Classic **UST1** swap tooling against bridged Venus **vFDUSD*
 
 ## Mainnet status (`columbus-5`)
 
-Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). Post-deploy wiring (`add_minter`, window migrate + treasury `SetCw20Spender` for InstantWithdrawCw20, first `UpdateRate`, oracle service) still pending — full operator registry in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Redeem path: [GitLab #20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20).
+Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). Post-deploy wiring (`add_minter`, window migrate + treasury `SetCw20Spender` for InstantWithdrawCw20, first `UpdateRate`, oracle service) still pending — full operator registry in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Redeem path: [GitLab #20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20). Wire-format pin vs ustr-cmm: [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21).
 
 ### Contracts & tokens
 
@@ -55,6 +55,7 @@ Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/Pla
 - **INV-ORACLE-TICK-001 / INV-ORACLE-ACCOUNT-001 / INV-ORACLE-GAS-001 / INV-ORACLE-HEALTHZ-001** — `oracle-service` tick timeout, fail-hard account parse, adaptive gas, process-up `/healthz` ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25); [`skills/audit-hardening-bundle`](skills/audit-hardening-bundle/SKILL.md))
 - **INV-LIMIT-001** — `ust1-window/src/state.rs`, enforced in `contract.rs`
 - **INV-WITHDRAW-001 / INV-WITHDRAW-002** — `ust1-window/src/state.rs` + `treasury.rs` / `contract.rs` (InstantWithdrawCw20; burn-then-pull atomicity) ([#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20))
+- **INV-SCHEMA-001** — `ust1-window/src/treasury.rs` + golden `testdata/instant_withdraw_cw20_golden.json` + integration `treasury_schema` / `real_treasury_integration` (pinned ustr-cmm wire format) ([#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21))
 - **INV-LIMIT-NATIVE-001** — `cmm-native-wrap/src/state.rs` / `limits.rs`, enforced in `wrap.rs` and `unwrap.rs`
 
 Operator checklist, BSC + Terra address registry, and mainnet/testnet deployment notes: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) ([GitLab #15](https://gitlab.com/PlasticDigits/ust1-window/-/issues/15)).

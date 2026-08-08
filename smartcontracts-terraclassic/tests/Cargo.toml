@@ -13,5 +13,8 @@ ust1-common = { workspace = true }
 ust1-oracle = { path = "../../contracts/ust1-oracle", features = ["library"] }
 ust1-window = { path = "../../contracts/ust1-window", features = ["library"] }
 cmm-native-wrap = { path = "../../contracts/cmm-native-wrap", features = ["library"] }
+# Real ustr-cmm treasury (schema + ACL). Rev pinned in workspace + INV-SCHEMA-001.
+cmm-treasury = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 proptest = { workspace = true }

@@ -33,10 +33,9 @@ async fn main() -> Result<()> {
 
     let cfg = config::Config::from_env()?;
     info!(allowed_chain_ids = ?cfg.allowed_bsc_chain_ids, "BSC EVM chain allowlist");
-    for msg in config::ops_timing_warnings(
-        cfg.poll_interval_secs,
-        cfg.max_silence_since_broadcast_secs,
-    ) {
+    for msg in
+        config::ops_timing_warnings(cfg.poll_interval_secs, cfg.max_silence_since_broadcast_secs)
+    {
         warn!(target: "ust1_oracle_service", alert = "ORACLE_OPS_TIMING_MISCONFIG", "{msg}");
     }
     bsc::verify_all_bsc_rpc_urls(

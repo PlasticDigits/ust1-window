@@ -1,5 +1,5 @@
 # You can override the included template(s) by including variable overrides
-# SAST customization: https://docs.gitlab.com/user/application_security/sast/#available-cicd-variables
+# SAST customization: https://docs.gitlab.com/user/application_security/sast/#customizing-analyzer-behavior
 # Secret Detection customization: https://docs.gitlab.com/user/application_security/secret_detection/pipeline/configure/
 # Dependency Scanning customization: https://docs.gitlab.com/user/application_security/dependency_scanning/dependency_scanning_sbom/#customizing-analyzer-behavior
 # Container Scanning customization: https://docs.gitlab.com/user/application_security/container_scanning/#customizing-analyzer-behavior
@@ -10,6 +10,28 @@ stages:
 - secret-detection
 variables:
   SECRET_DETECTION_ENABLED: 'true'
+  CARGO_TERM_COLOR: always
+
+# INV-SCHEMA-001 / issue #21: pin InstantWithdrawCw20 against ustr-cmm treasury.
+# Requires network to fetch the pinned git dep (same as local `cargo test`).
+rust:
+  stage: test
+  image: rust:1.88-bookworm
+  cache:
+    key: cargo-${CI_COMMIT_REF_SLUG}
+    paths:
+      - target/
+      - /usr/local/cargo/registry/
+      - /usr/local/cargo/git/
+  before_script:
+    - rustup component add rustfmt clippy
+    - apt-get update -qq && apt-get install -y -qq git pkg-config libssl-dev
+  script:
+    - cargo fmt --all -- --check
+    - cargo clippy --all-targets -- -D warnings
+    - cargo test
+    - bash scripts/verify_treasury_wire_schema.sh
+
 secret_detection:
   stage: secret-detection
 include:

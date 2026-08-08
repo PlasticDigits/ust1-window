@@ -221,7 +221,8 @@ Venus vFDUSD on BSC is **LockUnlock** (`registerToken` type **`0`**). Terra CW20
 - [x] Instantiate **`ust1-oracle`** — `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` (code **11549**).
 - [x] Instantiate **`ust1-window`** — `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` (code **11550**; approved fee/limits; default CMM treasury).
 - [ ] **UST1 minters:** from governance, execute cw20-mintable **`add_minter`** for **`ust1-window`** (see integration tests in `ust1-integration-tests`).
-- [ ] **Treasury / withdraw inventory (Option 3):** migrate window to InstantWithdrawCw20 code; treasury gov `SetCw20Spender` (+ `limit_24h`) for vFDUSD → window (see Phase 5). Depends on [ustr-cmm#6](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/6) / [#7](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/7) and [ust1-window#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20).
+- [ ] **Treasury / withdraw inventory (Option 3):** migrate window to InstantWithdrawCw20 code; treasury gov `SetCw20Spender` (+ `limit_24h`) for vFDUSD → window (see Phase 5). Depends on [ustr-cmm#6](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/6) / [#7](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/7) and [ust1-window#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20). Schema pin / CI: [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21).
+- [ ] **Pre-announce:** schema conformance green at pin rev; **live withdraw probe** tx recorded (Phase 5 §2 step 4).
 - [ ] **Governance handoff:** if required, run `ProposeGovernance` / `AcceptGovernance` on oracle and window.
 - [ ] **First oracle commit:** `oracle_operator` sends `UpdateRate` consistent with policy (service will continue updates).
 
@@ -477,11 +478,13 @@ Governance: `terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l`.
 
 **Chosen model ([#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20)):** window redeem calls treasury **`InstantWithdrawCw20`** (registered spender). Deposits still `Transfer` vFDUSD to treasury. **Do not** use EOA `increase_allowance` / CW20 `TransferFrom` against this treasury.
 
-Treasury half: [ustr-cmm#6](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/6) (spender registry) + [#7](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/7) (24h pull limit; **fail-closed** until limit is set). Agent skill: [`skills/window-instant-withdraw-cw20`](../skills/window-instant-withdraw-cw20/SKILL.md); treasury skill: ustr-cmm `skills/treasury-cw20-instant-withdraw`.
+Treasury half: [ustr-cmm#6](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/6) (spender registry) + [#7](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/7) (24h pull limit; **fail-closed** until limit is set). Cross-repo wire: [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21). Agent skill: [`skills/window-instant-withdraw-cw20`](../skills/window-instant-withdraw-cw20/SKILL.md); treasury skill: ustr-cmm `skills/treasury-cw20-instant-withdraw`.
+
+**Schema pin (INV-SCHEMA-001 / [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21)):** Window `InstantWithdrawCw20` JSON must match ustr-cmm treasury at git rev **`e6c4b7cf33f2f56d21c0e9fb2828efe87f032ded`** (`ust1_window::treasury::USTR_CMM_TREASURY_SCHEMA_REV`). Golden vectors: [`contracts/ust1-window/testdata/instant_withdraw_cw20_golden.json`](../contracts/ust1-window/testdata/instant_withdraw_cw20_golden.json). Verify / refresh: `scripts/verify_treasury_wire_schema.sh` (CI also runs `treasury_schema` + `real_treasury_integration` against the pinned `cmm-treasury` git dep).
 
 **Ops sequence (after window wasm with InstantWithdrawCw20 is stored):**
 
-1. Confirm treasury bytecode exposes `InstantWithdrawCw20` / `SetCw20Spender` (migrate treasury in place if still on pre-#6 code).
+1. Confirm treasury bytecode exposes `InstantWithdrawCw20` / `SetCw20Spender` (migrate treasury in place if still on pre-#6 code). Prefer bytecode built from the **schema pin** rev above (or a later rev that does not change the InstantWithdrawCw20 wire shape).
 2. Prefer **migrate** existing window `terra1zxwp…` (admin = governance) to the new code id so the address stays stable. `MigrateMsg` is empty; config (treasury, oracle, tokens, limits) is preserved.
 3. Treasury gov registers the window **with a 24h limit** (pulls fail without a limit):
 
@@ -495,7 +498,15 @@ terrad tx wasm execute "$CMM_TREASURY" \
   --keyring-backend file --broadcast-mode sync -y
 ```
 
-4. Query spenders / limit, then run a **small** UST1→vFDUSD withdraw smoke. Finder should show treasury CW20 **`Transfer`** (not `TransferFrom`). `allowance(treasury, window)` remains unused (0).
+4. Query spenders / limit, then run a **small** UST1→vFDUSD withdraw smoke (**live probe — required before public redeem announcement**). Finder should show treasury CW20 **`Transfer`** (not `TransferFrom`). `allowance(treasury, window)` remains unused (0). Record the probe tx hash in the [address registry](#address-registry-template) notes.
+
+**Live withdraw probe checklist (pre-announce):**
+
+- [ ] Schema pin rev recorded and CI `verify_treasury_wire_schema` / `treasury_schema` green on the deploy branch
+- [ ] Window migrated to InstantWithdrawCw20 code; treasury exposes spender API
+- [ ] `SetCw20Spender` + `limit_24h` executed for vFDUSD → window
+- [ ] Small smoke withdraw succeeds; events show CW20 `Transfer` from treasury
+- [ ] Unhappy path sanity (optional): confirm unregistered spender cannot pull (gov test on staging / LocalTerra)
 
 **Policy note:** Window per-tx / 24h UST1 limits remain the user-facing product caps; treasury `limit_24h` is a hard ceiling (defense in depth).
 
@@ -637,6 +648,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 |------|--------|
 | 2026-08-08 | Oracle circuit breaker: `State.paused` + window fail-closed (`OraclePaused`); emergency pause runbook ([issue #22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22); audit C-2 #1). |
 | 2026-08-08 | Audit hardening bundle ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)): `/healthz` liveness, tick/gas/RPC timeouts, INV-SWAP-003/004 dust guards, INV-DECIMALS-001, adaptive Terra gas price; skill [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md). |
+| 2026-08-08 | Cross-repo InstantWithdrawCw20 schema pin + golden + real-treasury multitest; strict stubs; live probe checklist ([issue #21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21) / audit C-1); ustr-cmm rev `e6c4b7cf…`. |
 | 2026-08-08 | Window withdraw = treasury `InstantWithdrawCw20` (Option 3); Phase 5 ops = migrate window + `SetCw20Spender`/`limit_24h` ([issue #20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20); depends on ustr-cmm #6/#7). |
 | 2026-07-30 | Mainnet CW20s live: **vFDUSD** `terra1mnl9…svj3`, **UST1** `terra1f0eq…fy72` (code **10184**); registry + README updated ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-07-30 | Phase 2/3 operator runbook: code id **10184**, known deployer/gov/BSC addresses, Venus vFDUSD **LockUnlock** + Terra **mint_burn**, decimals Terra 6 / BSC 8 ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
