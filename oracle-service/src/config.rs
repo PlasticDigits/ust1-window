@@ -10,9 +10,11 @@
 //! - **INV-ORACLE-OPS-SILENCE-001** — default `ORACLE_MAX_SILENCE_SECS` ≤ window max age so
 //!   liveness pages at or before swap halt.
 //!
-//! Related: C-3 / [glab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23) — after
-//! confirm-before-liveness, silence must key off **confirmed** on-chain updates (not CheckTx-only).
-//! Agent skill: `skills/oracle-ops-poll-silence/SKILL.md`.
+//! Liveness semantics (C-3 / [glab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)):
+//! - **INV-ORACLE-LIVENESS-001** — silence keys off **confirmed** on-chain updates (DeliverTx +
+//!   matching oracle `State`), not CheckTx-only. See `confirm` / `liveness`.
+//!
+//! Agent skills: `skills/oracle-ops-poll-silence/SKILL.md`, `skills/oracle-liveness-confirm/SKILL.md`.
 
 use alloy::primitives::Address;
 use eyre::{eyre, Result};
@@ -36,8 +38,8 @@ pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 3_600;
 ///
 /// **INV-ORACLE-OPS-SILENCE-001:** must not exceed
 /// [`DEFAULT_MAX_ORACLE_AGE_SECS`] (+ small grace). Prefer ≤ max age so ops are paged at or
-/// before users are bricked. Until C-3 (#23), "successful broadcast" still means CheckTx/sync
-/// accept — not DeliverTx confirmation.
+/// before users are bricked. **INV-ORACLE-LIVENESS-001:** "successful" means DeliverTx +
+/// matching oracle `State`, not CheckTx / `BROADCAST_MODE_SYNC` alone.
 pub const DEFAULT_ORACLE_MAX_SILENCE_SECS: u64 = DEFAULT_MAX_ORACLE_AGE_SECS;
 
 /// When the only allowed EVM chain is BSC mainnet (56), require the canonical Venus vFDUSD vToken.
@@ -174,9 +176,16 @@ pub struct Config {
     pub terra_mnemonic: SecretString,
     pub oracle_contract: String,
     pub poll_interval_secs: u64,
-    /// Emit a loud log if no successful Terra broadcast for this many seconds
+    /// Emit a loud log if no confirmed on-chain oracle update for this many seconds
     /// (default [`DEFAULT_ORACLE_MAX_SILENCE_SECS`] = 6h).
+    ///
+    /// “Successful” means DeliverTx + matching oracle `State` (INV-ORACLE-LIVENESS-001), not
+    /// CheckTx / `BROADCAST_MODE_SYNC` alone.
     pub max_silence_since_broadcast_secs: u64,
+    /// Max time to wait for DeliverTx inclusion after SYNC broadcast (default 90s).
+    pub tx_confirm_timeout_secs: u64,
+    /// Poll interval while waiting for tx inclusion (default 2000 ms).
+    pub tx_confirm_poll_interval_ms: u64,
 }
 
 impl Config {
@@ -225,6 +234,14 @@ impl Config {
             max_silence_since_broadcast_secs: resolve_max_silence_secs(
                 std::env::var("ORACLE_MAX_SILENCE_SECS").ok().as_deref(),
             ),
+            tx_confirm_timeout_secs: std::env::var("ORACLE_TX_CONFIRM_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(90),
+            tx_confirm_poll_interval_ms: std::env::var("ORACLE_TX_CONFIRM_POLL_INTERVAL_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2_000),
         })
     }
 }
@@ -261,6 +278,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn default_poll_and_silence_aligned_with_window_budget() {
         // H-3 / #24 acceptance: poll ≤ 1h and ≪ max age; silence ≤ max age (not 8h).
         assert!(DEFAULT_POLL_INTERVAL_SECS <= 3_600);
@@ -336,6 +354,8 @@ mod tests {
             oracle_contract: String::new(),
             poll_interval_secs: DEFAULT_POLL_INTERVAL_SECS,
             max_silence_since_broadcast_secs: DEFAULT_ORACLE_MAX_SILENCE_SECS,
+            tx_confirm_timeout_secs: 90,
+            tx_confirm_poll_interval_ms: 2_000,
         };
         let s = format!("{cfg:?}");
         assert!(

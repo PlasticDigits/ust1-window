@@ -25,6 +25,7 @@ The oracle service applies the **same** rate policy as the chain before broadcas
 - **INV-ORACLE-DAILY-001** — UTC calendar-day increase cap (2%).
 - **INV-ORACLE-MONO-001** — monotonic non-decreasing on-chain rate.
 - **INV-ORACLE-PAUSE-001** — when oracle `paused=true`, `UpdateRate` is blocked and **all** windows reading that oracle reject deposit/withdraw immediately (circuit breaker; do not wait for `max_oracle_age_sec`). See [Emergency pause](#emergency-pause-oracle-circuit-breaker-vs-window) ([GitLab #22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22); audit C-2 #1). Agent skill: [`skills/oracle-circuit-breaker`](../skills/oracle-circuit-breaker/SKILL.md).
+- **INV-ORACLE-LIVENESS-001** — oracle-service silence/liveness success only after DeliverTx `code == 0` **and** oracle `State` reflects the intended update (not CheckTx alone). See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md) ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23), audit C-3).
 
 ---
 
@@ -70,7 +71,7 @@ Ops timing vs window staleness ([glab #24](https://gitlab.com/PlasticDigits/ust1
 - Prefer: `poll < max_oracle_age` and `silence ≤ max_oracle_age` (page at or before user impact).
 - On-chain throttle / daily / mono policy are **unchanged**; frequent polls are mostly no-ops when within band.
 - The service does **not** read live on-chain `max_oracle_age_sec`; if governance changes it, retune env. Startup logs `ORACLE_OPS_TIMING_MISCONFIG` for common footguns (does not hard-fail).
-- Until confirm-before-liveness (C-3 / [#23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)), silence still keys off CheckTx accept — do not treat H-3 alone as full liveness correctness.
+- Silence keys off **confirmed** on-chain updates (DeliverTx + matching `State`, C-3 / [#23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)), not mempool CheckTx acceptance alone.
 
 ---
 
@@ -521,7 +522,9 @@ Until `last_update_sec` is set by a successful `UpdateRate`, window swaps may re
 ### Health / alerting
 
 - Enable Render **notifications** for **crashes and deploy failures**.
-- The binary emits **`error!`** if no successful broadcast exceeds `ORACLE_MAX_SILENCE_SECS` (default **21600** s) — forward logs to your SIEM or log drain and page on that pattern (`LIVENESS_ORACLE_NO_BROADCAST`). Also watch startup **`ORACLE_OPS_TIMING_MISCONFIG`** warnings.
+- Enable Render **notifications** for **crashes and deploy failures**.
+- The binary emits **`error!`** if no **confirmed on-chain oracle update** exceeds `ORACLE_MAX_SILENCE_SECS` (default **21600** s) — forward logs to your SIEM or log drain and page on that pattern (`LIVENESS_ORACLE_NO_BROADCAST`). Also watch startup **`ORACLE_OPS_TIMING_MISCONFIG`** warnings.
+- **Silence tracking means confirmed updates** (**INV-ORACLE-LIVENESS-001**, [GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)): after `BROADCAST_MODE_SYNC` CheckTx, the service waits for DeliverTx `code == 0` and verifies oracle `State` (`last_update_sec` advanced, `rate` matches the proposed update) before recording liveness. Mempool admission alone does **not** reset the silence timer. See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md).
 - Do **not** rely on Render’s HTTP health check for this binary unless you add an HTTP probe.
 
 ---
@@ -541,7 +544,9 @@ Loaded in [`Config::from_env`](../oracle-service/src/config.rs). Timing defaults
 | `TERRA_MNEMONIC` | Oracle operator seed (**secret**). |
 | `ORACLE_CONTRACT` | `ust1-oracle` address. |
 | `POLL_INTERVAL_SECS` | Default **3600** s (1h). Keep ≪ window `max_oracle_age_sec` (default 21600). Do not set to 21600 — zero missed-tick margin (H-3 / #24). |
-| `ORACLE_MAX_SILENCE_SECS` | Loud log if no successful broadcast (default **21600** s). Prefer ≤ window max oracle age; documented grace ≤ `max_age + poll`. |
+| `ORACLE_MAX_SILENCE_SECS` | Loud log if no **confirmed** on-chain oracle update (DeliverTx + matching `State`; default **21600** s). Prefer ≤ window max oracle age; documented grace ≤ `max_age + poll`. |
+| `ORACLE_TX_CONFIRM_TIMEOUT_SECS` | Max wait for DeliverTx after SYNC broadcast (default 90). |
+| `ORACLE_TX_CONFIRM_POLL_INTERVAL_MS` | Inclusion poll interval (default 2000). |
 
 **Production relationship:**
 
