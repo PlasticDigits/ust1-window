@@ -32,6 +32,33 @@ rust:
     - cargo test
     - bash scripts/verify_treasury_wire_schema.sh
 
+# TEST-16 / GitLab #28: optional LocalTerra-gated smoke (skip-clean when LCD down).
+# Always-on rust job already runs wiremock DeliverTx-reject + BSC hang + skip-path tests.
+# Owner: PlasticDigits. Promote to required only after deploy_local.py stores wasm.
+localterra-e2e:
+  stage: test
+  image: rust:1.88-bookworm
+  when: manual
+  allow_failure: true
+  needs: ["rust"]
+  cache:
+    key: cargo-${CI_COMMIT_REF_SLUG}
+    paths:
+      - target/
+      - /usr/local/cargo/registry/
+      - /usr/local/cargo/git/
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git pkg-config libssl-dev curl
+  script:
+    - bash scripts/localterra_e2e_smoke.sh
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+      allow_failure: true
+
 secret_detection:
   stage: secret-detection
 include:

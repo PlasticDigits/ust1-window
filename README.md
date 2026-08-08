@@ -46,7 +46,7 @@ Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/Pla
 - **INV-MATH-001 / INV-SWAP-001 / INV-SWAP-002** — `ust1-common/src/math.rs` (reverse path: `inv_swap_002_*` vector tests lock the fee-then-rate floor semantics)
 - **INV-SWAP-003 / INV-SWAP-004** — `ust1-window/src/contract.rs` (deposit/withdraw revert on zero output; math dust floors in `ust1-common` before contract guard) ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25))
 - **INV-DECIMALS-001** — `ust1-window/src/contract.rs` (`validate_token_decimals`: vFDUSD decimals ≥ UST1 decimals at instantiate/migrate) ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25))
-- **INV-MINTER-001** — `cw20-mintable` fork: `UpdateMinter` clears old primary from `MINTERS` ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25); [cw20-mintable#1](https://github.com/PlasticDigits/cw20-mintable/pull/1))
+- **INV-MINTER-001** — `cw20-mintable` fork: `UpdateMinter` clears old primary from `MINTERS` ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)/[#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28); [cw20-mintable#1](https://github.com/PlasticDigits/cw20-mintable/pull/1); in-repo: `ust1-integration-tests` `cw20_minter_integration`)
 - **INV-MATH-002** — `ust1-common/src/fee_split.rs` + `ust1-window` / `cmm-native-wrap` event attributes and `Effective*` queries (GitLab #17)
 - **INV-ORACLE-THROTTLE-001 / INV-ORACLE-DAILY-001 / INV-ORACLE-MONO-001** — `ust1-common/src/oracle_policy.rs` + `ust1-oracle`
 - **INV-ORACLE-OPS-POLL-001 / INV-ORACLE-OPS-SILENCE-001** — oracle-service poll ≪ / silence ≤ window `DEFAULT_MAX_ORACLE_AGE_SECS` ([#24](https://gitlab.com/PlasticDigits/ust1-window/-/issues/24); skill [`skills/oracle-ops-poll-silence`](skills/oracle-ops-poll-silence/SKILL.md))
@@ -66,6 +66,7 @@ Operator checklist, BSC + Terra address registry, and mainnet/testnet deployment
 make start          # LocalTerra (Docker)
 make wait-healthy
 make test-contracts
+make test-localterra-smoke   # TEST-16 / #28: skip-clean if LCD down; see docs/DEPLOYMENT.md
 # After deploy (see scripts/):
 # export BSC_RPC_URLS=..., VENUS_VTOKEN_ADDRESS=..., TERRA_LCD_URL=..., ORACLE_CONTRACT=...
 # cargo run -p ust1-oracle-service

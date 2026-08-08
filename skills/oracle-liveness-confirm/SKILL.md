@@ -13,6 +13,7 @@ alerting, or anything that calls `LivenessTracker::record_successful_broadcast`.
 ## Invariant
 
 **INV-ORACLE-LIVENESS-001** ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23),
+[#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28),
 audit C-3 in `audits/INTERNAL_KIMIK3_1786162831.md`):
 
 1. `BROADCAST_MODE_SYNC` with `tx_response.code == 0` means **CheckTx only**.
@@ -24,6 +25,8 @@ audit C-3 in `audits/INTERNAL_KIMIK3_1786162831.md`):
 4. Bind confirmation to the **exact txhash** returned by broadcast (reject hash mismatch).
 5. On account sequence mismatch, refresh account and retry broadcast **once**.
 6. Never log full LCD URLs with embedded API keys (use redacted LCD base).
+7. Equal-rate skip, oracle-paused skip, and policy skip (`check_rate_update` Err) must
+   **not** call `record_successful_broadcast` (no broadcast / no confirm poll).
 
 ## Code map
 
@@ -31,9 +34,10 @@ audit C-3 in `audits/INTERNAL_KIMIK3_1786162831.md`):
 |---------|------|
 | State match helper | `oracle-service/src/confirm.rs` |
 | SYNC broadcast + sequence retry + DeliverTx poll | `oracle-service/src/terra_tx.rs` |
-| Success gating before liveness | `oracle-service/src/main.rs` (`submit_and_confirm_oracle_update`) |
+| Success gating before liveness | `oracle-service/src/main.rs` (`decide_tick_action`, `submit_and_confirm_oracle_update`) |
 | Silence tracker semantics | `oracle-service/src/liveness.rs` |
 | `ORACLE_TX_CONFIRM_*` / silence env | `oracle-service/src/config.rs` |
+| TEST-16 LocalTerra gate | `scripts/localterra_e2e_smoke.sh`, `docs/DEPLOYMENT.md` § TEST-16 |
 | Operator docs | `docs/DEPLOYMENT.md`, root `README.md` |
 
 ## Env
@@ -48,10 +52,12 @@ audit C-3 in `audits/INTERNAL_KIMIK3_1786162831.md`):
 
 ```bash
 cargo test -p ust1-oracle-service
+make test-localterra-smoke   # optional; skip-clean without LocalTerra (#28 / TEST-16)
 ```
 
 Covered paths: confirm success, DeliverTx fail, timeout, state mismatch, sequence
-retry, hash mismatch, URL redaction. Prefer `wiremock` LCD fixtures over live chain.
+retry, hash mismatch, URL redaction, equal-rate skip (no liveness), policy-skip
+(no liveness), BSC hang timeout. Prefer `wiremock` LCD/BSC fixtures over live chain.
 
 ## Out of scope (related issues)
 

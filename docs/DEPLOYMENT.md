@@ -7,6 +7,7 @@ This document is the **operator-facing deployment path** for production: Terra C
 | Area | Location |
 |------|----------|
 | LocalTerra helper | [`scripts/deploy_local.py`](../scripts/deploy_local.py) |
+| LocalTerra / TEST-16 smoke | [`scripts/localterra_e2e_smoke.sh`](../scripts/localterra_e2e_smoke.sh), `make test-localterra-smoke` ([#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28)) |
 | Optimized wasm (UST1 contracts) | [`make build-optimized`](../Makefile), [`scripts/optimize.sh`](../scripts/optimize.sh) |
 | Oracle service config / canonical BSC token | [`oracle-service/src/config.rs`](../oracle-service/src/config.rs) |
 | On-chain oracle policy (must match service) | [`ust1-common` oracle_policy](../smartcontracts-terraclassic/packages/ust1-common/src/oracle_policy.rs), [`ust1-oracle`](../contracts/ust1-oracle) |
@@ -25,7 +26,22 @@ The oracle service applies the **same** rate policy as the chain before broadcas
 - **INV-ORACLE-DAILY-001** — UTC calendar-day increase cap (2%).
 - **INV-ORACLE-MONO-001** — monotonic non-decreasing on-chain rate.
 - **INV-ORACLE-PAUSE-001** — when oracle `paused=true`, `UpdateRate` is blocked and **all** windows reading that oracle reject deposit/withdraw immediately (circuit breaker; do not wait for `max_oracle_age_sec`). See [Emergency pause](#emergency-pause-oracle-circuit-breaker-vs-window) ([GitLab #22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22); audit C-2 #1). Agent skill: [`skills/oracle-circuit-breaker`](../skills/oracle-circuit-breaker/SKILL.md).
-- **INV-ORACLE-LIVENESS-001** — oracle-service silence/liveness success only after DeliverTx `code == 0` **and** oracle `State` reflects the intended update (not CheckTx alone). See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md) ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23), audit C-3).
+- **INV-ORACLE-LIVENESS-001** — oracle-service silence/liveness success only after DeliverTx `code == 0` **and** oracle `State` reflects the intended update (not CheckTx alone). Equal-rate and policy-skip paths must **not** call `record_successful_broadcast`. See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md) ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23), [#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28), audit C-3).
+- **INV-MINTER-001** — pinned `cw20-mintable` `UpdateMinter` clears the old primary from `MINTERS` (`None` or rotation). In-repo proof: `ust1-integration-tests` `cw20_minter_integration` ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)/[#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28); skill [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md)).
+
+---
+
+## TEST-16 / LocalTerra e2e status ([#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28))
+
+| Layer | Status | Where |
+|-------|--------|--------|
+| DeliverTx-reject → no liveness | **Always-on** (wiremock) | `ust1-oracle-service` `deliver_tx_failure_does_not_allow_liveness` (+ equal-rate / policy-skip / BSC hang) |
+| Oracle pause fail-closed | **Always-on** (multitest + integration) | `ust1-window` multitest + `ust1-integration-tests` `oracle_paused_blocks_deposit_and_withdraw_while_rate_fresh` |
+| Full LocalTerra wasm e2e | **Optional / gated** | `make test-localterra-smoke` → [`scripts/localterra_e2e_smoke.sh`](../scripts/localterra_e2e_smoke.sh); CI jobs `localterra-e2e` (GitLab **manual** + `allow_failure`, GitHub `continue-on-error`) |
+
+**Ownership:** PlasticDigits. The gated job **skips cleanly** (exit 0) when LCD/RPC is down so default pipelines stay fast. Promote to required only after [`scripts/deploy_local.py`](../scripts/deploy_local.py) can store/instantiate optimized wasm without manual `terrad` steps. Mainnet ops probes (live withdraw, staging restart logs) remain runbook items under Phase 5 / [#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19) — not TEST-16.
+
+Agent skills: [`oracle-liveness-confirm`](../skills/oracle-liveness-confirm/SKILL.md), [`oracle-circuit-breaker`](../skills/oracle-circuit-breaker/SKILL.md), [`audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md).
 
 ---
 
@@ -468,6 +484,26 @@ terrad tx wasm execute "$TERRA_UST1" \
   --keyring-backend file --broadcast-mode sync -y
 ```
 
+**Bootstrap / INV-MINTER-001 ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)/[#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28)):** after the window is an additional minter, drop governance self-mint so a stale `MINTERS` entry cannot mint:
+
+```bash
+# Clear primary minter (also removes dual-listed primary from MINTERS on pinned fork)
+terrad tx wasm execute "$TERRA_UST1" \
+  '{"update_minter":{"new_minter":null}}' \
+  --from "$GOVERNANCE_KEY" \
+  --chain-id columbus-5 --node "$TERRA_RPC" \
+  --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
+  --keyring-backend file --broadcast-mode sync -y
+
+# Or rotate primary to a dedicated admin, then AddMinter(window) from the new primary:
+# '{"update_minter":{"new_minter":"'"$NEW_PRIMARY"'"}}'
+terrad query wasm contract-state smart "$TERRA_UST1" \
+  '{"minters":{}}' --chain-id columbus-5 --node "$TERRA_RPC"
+# expect governance address absent from minters list
+```
+
+In-repo regression: `cargo test -p ust1-integration-tests --lib inv_minter_001`.
+
 ### 2) Withdraw inventory — Option 3 (`InstantWithdrawCw20`)
 
 Default `cmm_treasury` is the **ustr-cmm Treasury** contract:
@@ -646,6 +682,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-08-08 | Post-merge coverage gaps ([#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28)): M-8 minter integration, BSC hang, SIGTERM hook, equal-rate/policy-skip liveness, pause integration, TEST-16 LocalTerra gated smoke + docs. |
 | 2026-08-08 | Oracle circuit breaker: `State.paused` + window fail-closed (`OraclePaused`); emergency pause runbook ([issue #22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22); audit C-2 #1). |
 | 2026-08-08 | Audit hardening bundle ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)): `/healthz` liveness, tick/gas/RPC timeouts, INV-SWAP-003/004 dust guards, INV-DECIMALS-001, adaptive Terra gas price; skill [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md). |
 | 2026-08-08 | Cross-repo InstantWithdrawCw20 schema pin + golden + real-treasury multitest; strict stubs; live probe checklist ([issue #21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21) / audit C-1); ustr-cmm rev `e6c4b7cf…`. |

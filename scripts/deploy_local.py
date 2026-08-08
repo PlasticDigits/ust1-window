@@ -8,6 +8,9 @@ Install the Terra Classic CLI and run inside the LocalTerra container or against
 For **mainnet / testnet** checklists, address registry, BSC integration notes, and oracle env
 semantics, see ``docs/DEPLOYMENT.md`` (GitLab issue #15).
 
+TEST-16 / LocalTerra gated smoke (DeliverTx-reject / skip-path; skip-clean without LCD):
+``make test-localterra-smoke`` / ``scripts/localterra_e2e_smoke.sh`` (GitLab issue #28).
+
 Environment:
   CHAIN_ID (default: localterra)
   HOME / keyring (configure per your terrad setup)
