@@ -199,26 +199,20 @@ mod tests {
     async fn consensus_two_agreeing_providers() {
         let rate = Uint128::from(1_000_000u128);
         let urls = vec!["http://rpc-a".to_string(), "http://rpc-b".to_string()];
-        let got = run_with_evm_rpc_rate_consensus(&urls, |_url| {
-            let rate = rate;
-            async move { Ok(rate) }
-        })
-        .await
-        .unwrap();
+        let got = run_with_evm_rpc_rate_consensus(&urls, move |_url| async move { Ok(rate) })
+            .await
+            .unwrap();
         assert_eq!(got, rate);
     }
 
     #[tokio::test]
     async fn consensus_mismatch_without_third_fails() {
         let urls = vec!["http://rpc-a".to_string(), "http://rpc-b".to_string()];
-        let err = run_with_evm_rpc_rate_consensus(&urls, |url| {
-            let url = url;
-            async move {
-                if url.contains("rpc-a") {
-                    Ok(Uint128::from(1_000_000u128))
-                } else {
-                    Ok(Uint128::from(2_000_000u128))
-                }
+        let err = run_with_evm_rpc_rate_consensus(&urls, |url| async move {
+            if url.contains("rpc-a") {
+                Ok(Uint128::from(1_000_000u128))
+            } else {
+                Ok(Uint128::from(2_000_000u128))
             }
         })
         .await
