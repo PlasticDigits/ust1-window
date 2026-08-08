@@ -4518,6 +4518,7 @@ name = "ust1-integration-tests"
 version = "0.1.0"
 dependencies = [
  "cmm-native-wrap",
+ "cosmwasm-schema",
  "cosmwasm-std",
  "cw-multi-test",
  "cw20",

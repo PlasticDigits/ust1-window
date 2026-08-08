@@ -16,6 +16,7 @@ use crate::state::{
     Config, PendingGovernance, RollingVolume, CONFIG, CONTRACT_NAME, CONTRACT_VERSION,
     PENDING_GOVERNANCE, ROLLING,
 };
+use crate::treasury;
 
 fn query_oracle_state(
     deps: Deps,
@@ -41,22 +42,6 @@ fn query_cw20_balance(
         })?,
     }))?;
     Ok(bal.balance)
-}
-
-fn query_cw20_allowance(
-    deps: Deps,
-    token: &cosmwasm_std::Addr,
-    owner: &cosmwasm_std::Addr,
-    spender: &cosmwasm_std::Addr,
-) -> StdResult<Uint128> {
-    let a: cw20::AllowanceResponse = deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
-        contract_addr: token.to_string(),
-        msg: to_json_binary(&cw20::Cw20QueryMsg::Allowance {
-            owner: owner.to_string(),
-            spender: spender.to_string(),
-        })?,
-    }))?;
-    Ok(a.allowance)
 }
 
 fn validate_max_oracle_age_sec(max_age_sec: u64) -> Result<(), ContractError> {
@@ -266,46 +251,36 @@ fn withdraw(
         return Err(ContractError::BelowMinimum {});
     }
 
+    // Prefer a clear window-side error before calling treasury (treasury also checks balance).
     let treasury_bal = query_cw20_balance(deps.as_ref(), &cfg.vfdusd_token, &cfg.cmm_treasury)?;
     if treasury_bal < v_out {
         return Err(ContractError::InsufficientVfdusd {});
-    }
-    let allowance = query_cw20_allowance(
-        deps.as_ref(),
-        &cfg.vfdusd_token,
-        &cfg.cmm_treasury,
-        &env.contract.address,
-    )?;
-    if allowance < v_out {
-        return Err(ContractError::InsufficientTreasuryAllowance {});
     }
 
     let mut rolling = ROLLING.load(deps.storage)?;
     ensure_limits(&env, &mut rolling, &cfg, gross_ust1)?;
     ROLLING.save(deps.storage, &rolling)?;
 
+    // INV-WITHDRAW-002: burn first, then InstantWithdrawCw20 — same Response (atomic).
     let burn = WasmMsg::Execute {
         contract_addr: cfg.ust1_token.to_string(),
         msg: to_json_binary(&Cw20ExecuteMsg::Burn { amount: gross_ust1 })?,
         funds: vec![],
     };
 
-    let send_v = WasmMsg::Execute {
-        contract_addr: cfg.vfdusd_token.to_string(),
-        msg: to_json_binary(&Cw20ExecuteMsg::TransferFrom {
-            owner: cfg.cmm_treasury.to_string(),
-            recipient: user.to_string(),
-            amount: v_out,
-        })?,
-        funds: vec![],
-    };
+    let pull_v = treasury::instant_withdraw_cw20_msg(
+        &cfg.cmm_treasury,
+        &user,
+        &cfg.vfdusd_token,
+        v_out,
+    )?;
 
     let (fee_chain_tax_bps, fee_cmm_protocol_bps) =
         ust1_common::fee_split::chain_tax_and_cmm_protocol(cfg.fee_bps);
 
     Ok(Response::new()
         .add_message(burn)
-        .add_message(send_v)
+        .add_message(pull_v)
         .add_attribute("action", "withdraw")
         .add_attribute("vfdusd_out", v_out)
         .add_attribute("fee_total_bps", cfg.fee_bps.to_string())

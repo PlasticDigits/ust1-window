@@ -1,6 +1,7 @@
-//! **INV-SWAP-001 / INV-LIMIT-001**: End-to-end deposit and withdraw on mock chain.
+//! **INV-SWAP-001 / INV-LIMIT-001 / INV-WITHDRAW-001**: End-to-end deposit and withdraw
+//! via treasury `InstantWithdrawCw20` (no CW20 allowance).
 use cosmwasm_std::{to_json_binary, Addr, Empty, Timestamp, Uint128};
-use cw20::{Cw20ExecuteMsg, Expiration, MinterResponse};
+use cw20::{Cw20ExecuteMsg, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
 use ust1_common::{
     DEFAULT_FEE_BPS, DEFAULT_MAX_ORACLE_AGE_SECS, DEFAULT_PER_TX_UST1_LIMIT,
@@ -8,6 +9,8 @@ use ust1_common::{
 };
 use ust1_oracle::msg as oracle_msg;
 use ust1_window::msg as window_msg;
+
+use crate::stub_treasury;
 
 fn oracle_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
     let c = ContractWrapper::new(
@@ -38,11 +41,20 @@ fn cw20_mintable_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
     Box::new(c)
 }
 
+fn stub_treasury_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
+    let c = ContractWrapper::new(
+        stub_treasury::execute,
+        stub_treasury::instantiate,
+        stub_treasury::query,
+    );
+    Box::new(c)
+}
+
 struct WindowEnv {
     app: App,
     owner: Addr,
     user: Addr,
-    _treasury: Addr,
+    treasury: Addr,
     oracle: Addr,
     vfdusd: Addr,
     ust1: Addr,
@@ -54,11 +66,11 @@ fn setup_window_env() -> WindowEnv {
     let owner = Addr::unchecked("owner");
     let bot = Addr::unchecked("bot");
     let user = Addr::unchecked("user");
-    let treasury = Addr::unchecked("treasury");
 
     let oracle_id = app.store_code(oracle_contract());
     let window_id = app.store_code(window_contract());
     let cw20_id = app.store_code(cw20_mintable_contract());
+    let treasury_id = app.store_code(stub_treasury_contract());
 
     let oracle = app
         .instantiate_contract(
@@ -117,6 +129,17 @@ fn setup_window_env() -> WindowEnv {
         )
         .unwrap();
 
+    let treasury = app
+        .instantiate_contract(
+            treasury_id,
+            owner.clone(),
+            &stub_treasury::InstantiateMsg {},
+            &[],
+            "treasury",
+            None,
+        )
+        .unwrap();
+
     let window = app
         .instantiate_contract(
             window_id,
@@ -148,23 +171,11 @@ fn setup_window_env() -> WindowEnv {
     )
     .unwrap();
 
-    app.execute_contract(
-        treasury.clone(),
-        vfdusd.clone(),
-        &cw20_mintable::msg::ExecuteMsg::IncreaseAllowance {
-            spender: window.to_string(),
-            amount: Uint128::MAX,
-            expires: Some(Expiration::Never {}),
-        },
-        &[],
-    )
-    .unwrap();
-
     WindowEnv {
         app,
         owner,
         user,
-        _treasury: treasury,
+        treasury,
         oracle,
         vfdusd,
         ust1,
@@ -193,6 +204,7 @@ fn deposit_and_withdraw_round_trip() {
         mut app,
         owner,
         user,
+        treasury,
         vfdusd,
         ust1,
         window,
@@ -213,18 +225,42 @@ fn deposit_and_withdraw_round_trip() {
     )
     .unwrap();
 
+    let dep = Uint128::from(1_000_000u128);
     let hook = window_msg::Cw20HookMsg::Deposit {};
     app.execute_contract(
         user.clone(),
         vfdusd.clone(),
         &Cw20ExecuteMsg::Send {
             contract: window.to_string(),
-            amount: Uint128::from(1_000_000u128),
+            amount: dep,
             msg: to_json_binary(&hook).unwrap(),
         },
         &[],
     )
     .unwrap();
+
+    let treasury_bal: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            vfdusd.clone(),
+            &cw20::Cw20QueryMsg::Balance {
+                address: treasury.to_string(),
+            },
+        )
+        .unwrap();
+    assert_eq!(treasury_bal.balance, dep);
+
+    let allowance: cw20::AllowanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            vfdusd.clone(),
+            &cw20::Cw20QueryMsg::Allowance {
+                owner: treasury.to_string(),
+                spender: window.to_string(),
+            },
+        )
+        .unwrap();
+    assert_eq!(allowance.allowance, Uint128::zero());
 
     let bal: cw20::BalanceResponse = app
         .wrap()
