@@ -5,5 +5,6 @@ Project skills for third-party / Cursor agents working in this repo.
 | Skill | When to use |
 |-------|-------------|
 | [window-instant-withdraw-cw20](./window-instant-withdraw-cw20/SKILL.md) | Window redeem via treasury `InstantWithdrawCw20`, stub-treasury tests, migrate + `SetCw20Spender` ops ([#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20); depends on [ustr-cmm#6](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/6) / [#7](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/7)) |
+| [oracle-liveness-confirm](./oracle-liveness-confirm/SKILL.md) | Oracle-service DeliverTx + `State` confirmation before liveness success (**INV-ORACLE-LIVENESS-001**, audit C-3, [#23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)) |
 
 Human-facing deploy docs: [docs/DEPLOYMENT.md](../docs/DEPLOYMENT.md). Companion treasury skill (other repo): `ustr-cmm/skills/treasury-cw20-instant-withdraw`.

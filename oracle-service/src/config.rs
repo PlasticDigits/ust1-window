@@ -2,7 +2,8 @@
 //!
 //! Deployment checklist and env table: `docs/DEPLOYMENT.md` (repo root). Invariants mirrored
 //! off-chain: **INV-ORACLE-THROTTLE-001**, **INV-ORACLE-DAILY-001**, **INV-ORACLE-MONO-001** in
-//! `ust1-common::oracle_policy`.
+//! `ust1-common::oracle_policy`; **INV-ORACLE-LIVENESS-001** in `confirm` / `liveness`
+//! ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)).
 
 use alloy::primitives::Address;
 use eyre::{eyre, Result};
@@ -94,8 +95,15 @@ pub struct Config {
     pub terra_mnemonic: SecretString,
     pub oracle_contract: String,
     pub poll_interval_secs: u64,
-    /// Emit a loud log if no successful Terra broadcast for this many seconds (default 8h).
+    /// Emit a loud log if no confirmed on-chain oracle update for this many seconds (default 8h).
+    ///
+    /// “Successful” means DeliverTx + matching oracle `State` (INV-ORACLE-LIVENESS-001), not
+    /// CheckTx / `BROADCAST_MODE_SYNC` alone.
     pub max_silence_since_broadcast_secs: u64,
+    /// Max time to wait for DeliverTx inclusion after SYNC broadcast (default 90s).
+    pub tx_confirm_timeout_secs: u64,
+    /// Poll interval while waiting for tx inclusion (default 2000 ms).
+    pub tx_confirm_poll_interval_ms: u64,
 }
 
 impl Config {
@@ -146,6 +154,14 @@ impl Config {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(28_800),
+            tx_confirm_timeout_secs: std::env::var("ORACLE_TX_CONFIRM_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(90),
+            tx_confirm_poll_interval_ms: std::env::var("ORACLE_TX_CONFIRM_POLL_INTERVAL_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2_000),
         })
     }
 }
@@ -198,6 +214,8 @@ mod tests {
             oracle_contract: String::new(),
             poll_interval_secs: 0,
             max_silence_since_broadcast_secs: 28_800,
+            tx_confirm_timeout_secs: 90,
+            tx_confirm_poll_interval_ms: 2_000,
         };
         let s = format!("{cfg:?}");
         assert!(

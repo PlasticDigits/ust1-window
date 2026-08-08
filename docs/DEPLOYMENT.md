@@ -24,6 +24,7 @@ The oracle service applies the **same** rate policy as the chain before broadcas
 - **INV-ORACLE-THROTTLE-001** — minimum interval between on-chain updates (4h).
 - **INV-ORACLE-DAILY-001** — UTC calendar-day increase cap (2%).
 - **INV-ORACLE-MONO-001** — monotonic non-decreasing on-chain rate.
+- **INV-ORACLE-LIVENESS-001** — oracle-service silence/liveness success only after DeliverTx `code == 0` **and** oracle `State` reflects the intended update (not CheckTx alone). See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md) ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23), audit C-3).
 
 ---
 
@@ -472,7 +473,8 @@ Until `last_update_sec` is set by a successful `UpdateRate`, window swaps may re
 ### Health / alerting
 
 - Enable Render **notifications** for **crashes and deploy failures**.
-- The binary emits **`error!`** if no successful broadcast exceeds `ORACLE_MAX_SILENCE_SECS` — forward logs to your SIEM or log drain and page on that pattern.
+- The binary emits **`error!`** if no **confirmed on-chain oracle update** exceeds `ORACLE_MAX_SILENCE_SECS` — forward logs to your SIEM or log drain and page on that pattern.
+- **Silence tracking means confirmed updates** (**INV-ORACLE-LIVENESS-001**, [GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)): after `BROADCAST_MODE_SYNC` CheckTx, the service waits for DeliverTx `code == 0` and verifies oracle `State` (`last_update_sec` advanced, `rate` matches the proposed update) before recording liveness. Mempool admission alone does **not** reset the silence timer. See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md).
 - Do **not** rely on Render’s HTTP health check for this binary unless you add an HTTP probe.
 
 ---
@@ -492,7 +494,9 @@ Loaded in [`Config::from_env`](../oracle-service/src/config.rs):
 | `TERRA_MNEMONIC` | Oracle operator seed (**secret**). |
 | `ORACLE_CONTRACT` | `ust1-oracle` address. |
 | `POLL_INTERVAL_SECS` | Default 21600 s. |
-| `ORACLE_MAX_SILENCE_SECS` | Loud log if no successful broadcast (default 28800 s). |
+| `ORACLE_MAX_SILENCE_SECS` | Loud log if no **confirmed** on-chain oracle update (DeliverTx + matching `State`; default 28800 s). |
+| `ORACLE_TX_CONFIRM_TIMEOUT_SECS` | Max wait for DeliverTx after SYNC broadcast (default 90). |
+| `ORACLE_TX_CONFIRM_POLL_INTERVAL_MS` | Inclusion poll interval (default 2000). |
 
 **HTTPS:** production must use `https://`. Local-only: `DEV_ALLOW_HTTP=1` for loopback (see `config.rs`).
 

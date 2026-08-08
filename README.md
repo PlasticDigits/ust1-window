@@ -38,7 +38,7 @@ Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/Pla
 | `contracts/ust1-oracle` | On-chain rate `R`, 4h min interval, UTC daily +2% cap, monotonic |
 | `contracts/ust1-window` | cw20 receive: vFDUSD→mint UST1 + forward vFDUSD to CMM treasury; UST1→burn + treasury `InstantWithdrawCw20` (registered spender; no CW20 allowance); governance-set fee on UST1 leg (`fee_bps`, default 1.0% with 50/50 chain-tax vs CMM accounting). Skill: [`skills/window-instant-withdraw-cw20`](skills/window-instant-withdraw-cw20/SKILL.md) |
 | `contracts/cmm-native-wrap` | Native `Wrap` + cw20 `Receive` unwrap: **uluna**↔wLUNC, **uusd**↔wUSTC only; governance `fee_bps` (default **1%** recommended per GitLab #17) with **50/50** chain-tax vs CMM attribution on events / `EffectiveWrap`; per-denom limits; **no** `ust1-oracle` (GitLab #16) |
-| `oracle-service` | Polls BSC `exchangeRateStored`, applies same policy as chain, broadcasts `UpdateRate` |
+| `oracle-service` | Polls BSC `exchangeRateStored`, applies same policy as chain, broadcasts `UpdateRate`, confirms DeliverTx + `State` before liveness ([#23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23); skill [`skills/oracle-liveness-confirm`](skills/oracle-liveness-confirm/SKILL.md)) |
 | `scripts/` | Python 3 deploy helpers (no business logic) |
 
 ## Invariants (index)
@@ -46,6 +46,7 @@ Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/Pla
 - **INV-MATH-001 / INV-SWAP-001 / INV-SWAP-002** — `ust1-common/src/math.rs` (reverse path: `inv_swap_002_*` vector tests lock the fee-then-rate floor semantics)
 - **INV-MATH-002** — `ust1-common/src/fee_split.rs` + `ust1-window` / `cmm-native-wrap` event attributes and `Effective*` queries (GitLab #17)
 - **INV-ORACLE-THROTTLE-001 / INV-ORACLE-DAILY-001 / INV-ORACLE-MONO-001** — `ust1-common/src/oracle_policy.rs` + `ust1-oracle`
+- **INV-ORACLE-LIVENESS-001** — oracle-service confirms DeliverTx + matching oracle `State` before silence/liveness success (not CheckTx alone); `oracle-service/src/{confirm,terra_tx,liveness,main}.rs`, skill [`skills/oracle-liveness-confirm`](skills/oracle-liveness-confirm/SKILL.md) ([#23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23), audit C-3)
 - **INV-LIMIT-001** — `ust1-window/src/state.rs`, enforced in `contract.rs`
 - **INV-WITHDRAW-001 / INV-WITHDRAW-002** — `ust1-window/src/state.rs` + `treasury.rs` / `contract.rs` (InstantWithdrawCw20; burn-then-pull atomicity) ([#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20))
 - **INV-LIMIT-NATIVE-001** — `cmm-native-wrap/src/state.rs` / `limits.rs`, enforced in `wrap.rs` and `unwrap.rs`
@@ -65,13 +66,13 @@ make test-contracts
 
 ## Oracle service: observability and deployment
 
-The `ust1-oracle-service` binary is intentionally **lightweight**: it uses **structured `tracing` logs only** (no Prometheus or in-process metrics server). Every `check_rate_update` and `sign_and_broadcast_execute` outcome is logged at `info` (policy result) or `info`/`warn` (broadcast). If there has been **no successful on-chain broadcast** for longer than **`ORACLE_MAX_SILENCE_SECS`** (default **28800**, i.e. 8 hours), the process emits a **high-visibility `error!` liveness alert** on each poll tick.
+The `ust1-oracle-service` binary is intentionally **lightweight**: it uses **structured `tracing` logs only** (no Prometheus or in-process metrics server). Every `check_rate_update` and broadcast/confirm outcome is logged at `info` (policy / confirmed update) or `warn` (CheckTx / DeliverTx / state confirmation failure). **`BROADCAST_MODE_SYNC` CheckTx success alone does not count as success** (**INV-ORACLE-LIVENESS-001**): the service polls for DeliverTx inclusion and verifies oracle `State` (`last_update_sec` advanced, `rate` matches) before recording liveness. If there has been **no confirmed on-chain oracle update** for longer than **`ORACLE_MAX_SILENCE_SECS`** (default **28800**, i.e. 8 hours), the process emits a **high-visibility `error!` liveness alert** on each poll tick.
 
-**Production-style deployment** (Terra Classic wasm + BSC oracle path + operator checklist + address registry) is documented in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). After exporting env vars, run `make verify-oracle-env` to confirm required keys are present before starting the service.
+**Production-style deployment** (Terra Classic wasm + BSC oracle path + operator checklist + address registry) is documented in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). After exporting env vars, run `make verify-oracle-env` to confirm required keys are present before starting the service. Agent-oriented confirm semantics: [`skills/oracle-liveness-confirm/SKILL.md`](skills/oracle-liveness-confirm/SKILL.md) ([#23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)).
 
 **Deployment** (e.g. [Render](https://render.com)): the platform should provide an **HTTP health check** and **uptime / failure alerting** on the service URL or process, similar to Render’s built-in health checks and notifications. Whatever host you use must offer **comparable external monitoring** so silent process hangs or repeated crashes are surfaced; the in-process log alert is not a substitute for off-platform paging.
 
-Relevant environment variables: `ORACLE_MAX_SILENCE_SECS`, `POLL_INTERVAL_SECS`, plus the oracle env vars listed under Local development above and in `docs/DEPLOYMENT.md`.
+Relevant environment variables: `ORACLE_MAX_SILENCE_SECS`, `ORACLE_TX_CONFIRM_TIMEOUT_SECS`, `ORACLE_TX_CONFIRM_POLL_INTERVAL_MS`, `POLL_INTERVAL_SECS`, plus the oracle env vars listed under Local development above and in `docs/DEPLOYMENT.md`.
 
 ## Build optimized Wasm
 

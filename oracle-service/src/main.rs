@@ -1,7 +1,12 @@
 //! Poll BSC Venus vToken rate and update `ust1-oracle` on Terra Classic when policy allows.
+//!
+//! Liveness success is gated by **INV-ORACLE-LIVENESS-001** (DeliverTx + oracle state);
+//! see `confirm`, `liveness`, and `skills/oracle-liveness-confirm/SKILL.md`
+//! ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)).
 
 mod bsc;
 mod config;
+mod confirm;
 mod evm_rpc;
 mod liveness;
 mod terra_tx;
@@ -41,6 +46,8 @@ async fn main() -> Result<()> {
         address = %signer.address_str(),
         poll_interval_secs = cfg.poll_interval_secs,
         max_silence_since_broadcast_secs = cfg.max_silence_since_broadcast_secs,
+        tx_confirm_timeout_secs = cfg.tx_confirm_timeout_secs,
+        tx_confirm_poll_interval_ms = cfg.tx_confirm_poll_interval_ms,
         "oracle operator"
     );
 
@@ -54,8 +61,8 @@ async fn main() -> Result<()> {
                     alert = "LIVENESS_ORACLE_NO_BROADCAST",
                     silence_secs,
                     threshold_secs = cfg.max_silence_since_broadcast_secs,
-                    "LIVENESS ALERT: no successful Terra oracle broadcast within the configured silence window; \
-                     on-chain rate may be stale — investigate LCD, BSC RPC, keys, and policy"
+                    "LIVENESS ALERT: no confirmed on-chain Terra oracle update within the configured silence window; \
+                     on-chain rate may be stale — investigate LCD, BSC RPC, keys, policy, and DeliverTx confirmation"
                 );
             }
         }
@@ -109,15 +116,16 @@ async fn run_once(
                 proposed = %proposed,
                 "policy allows oracle update"
             );
-            let msg = ExecuteMsg::UpdateRate { new_rate: proposed };
-            let txh = signer
-                .sign_and_broadcast_execute(&cfg.oracle_contract, &msg)
-                .await?;
+            let txh = submit_and_confirm_oracle_update(cfg, signer, proposed, &state).await?;
             liveness
                 .lock()
                 .expect("liveness mutex poisoned")
                 .record_successful_broadcast();
-            info!(tx_hash = %txh, new_rate = %proposed, "submitted oracle update");
+            info!(
+                tx_hash = %txh,
+                new_rate = %proposed,
+                "confirmed on-chain oracle update"
+            );
         }
         Err(e) => {
             info!(
@@ -133,10 +141,319 @@ async fn run_once(
     Ok(())
 }
 
+/// Broadcast `UpdateRate`, wait for DeliverTx success, then verify oracle `State`.
+///
+/// Does **not** record liveness — caller records only after this returns `Ok`
+/// (INV-ORACLE-LIVENESS-001).
+async fn submit_and_confirm_oracle_update(
+    cfg: &config::Config,
+    signer: &terra_tx::TerraSigner,
+    proposed: Uint128,
+    prior: &StateResponse,
+) -> Result<String> {
+    let msg = ExecuteMsg::UpdateRate { new_rate: proposed };
+    let txh = signer
+        .sign_and_broadcast_execute(&cfg.oracle_contract, &msg)
+        .await?;
+    let confirm = terra_tx::ConfirmConfig::from_secs_and_ms(
+        cfg.tx_confirm_timeout_secs,
+        cfg.tx_confirm_poll_interval_ms,
+    );
+    signer
+        .wait_for_deliver_tx_success(&txh, &confirm)
+        .await
+        .map_err(|e| {
+            warn!(
+                event = "oracle_tx_confirm",
+                outcome = "failed",
+                tx_hash = %txh,
+                error = %e,
+                "oracle update not confirmed; not recording liveness success"
+            );
+            e
+        })?;
+    let state: StateResponse = signer
+        .query_wasm_smart(&cfg.oracle_contract, &QueryMsg::State {})
+        .await?;
+    confirm::oracle_state_matches_intended_update(prior.last_update_sec, &state, proposed)
+        .map_err(|e| {
+            warn!(
+                event = "oracle_state_confirm",
+                outcome = "failed",
+                tx_hash = %txh,
+                error = %e,
+                "oracle State did not reflect update; not recording liveness success"
+            );
+            e
+        })?;
+    Ok(txh)
+}
+
 fn now_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod submit_confirm_tests {
+    use super::*;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use secrecy::SecretString;
+    use serde_json::json;
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const TEST_MNEMONIC: &str =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const CONTRACT: &str = "terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n";
+
+    fn test_cfg(lcd: &str) -> config::Config {
+        config::Config {
+            bsc_rpc_urls: vec![
+                "http://127.0.0.1:8545".into(),
+                "http://127.0.0.1:8546".into(),
+            ],
+            bsc_confirmation_blocks: 1,
+            allowed_bsc_chain_ids: vec![31337],
+            venus_vtoken_address: "0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba".into(),
+            terra_lcd_url: lcd.to_string(),
+            terra_chain_id: "localterra".into(),
+            terra_mnemonic: SecretString::new(TEST_MNEMONIC.to_string().into_boxed_str()),
+            oracle_contract: CONTRACT.into(),
+            poll_interval_secs: 60,
+            max_silence_since_broadcast_secs: 28_800,
+            tx_confirm_timeout_secs: 2,
+            tx_confirm_poll_interval_ms: 20,
+        }
+    }
+
+    fn account_json(sequence: u64) -> serde_json::Value {
+        json!({
+            "account": {
+                "@type": "/cosmos.auth.v1beta1.BaseAccount",
+                "account_number": "1",
+                "sequence": sequence.to_string()
+            }
+        })
+    }
+
+    fn state_lcd_body(rate: u128, last_update_sec: u64) -> serde_json::Value {
+        let st = StateResponse {
+            rate: Uint128::new(rate),
+            last_update_sec,
+            utc_day_id: 1,
+            day_baseline_rate: Uint128::new(rate),
+        };
+        json!({ "data": STANDARD.encode(serde_json::to_vec(&st).unwrap()) })
+    }
+
+    async fn mount_account(server: &MockServer, sequence: u64) {
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/cosmos/auth/v1beta1/accounts/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(account_json(sequence)))
+            .mount(server)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn happy_path_records_liveness_only_after_confirm() {
+        let server = MockServer::start().await;
+        let hash = "HAPPYTX01";
+        let proposed = Uint128::new(2_000);
+        let prior = StateResponse {
+            rate: Uint128::new(1_000),
+            last_update_sec: 100,
+            utc_day_id: 1,
+            day_baseline_rate: Uint128::new(1_000),
+        };
+
+        mount_account(&server, 1).await;
+        Mock::given(method("POST"))
+            .and(path("/cosmos/tx/v1beta1/txs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "tx_response": { "txhash": hash, "code": 0, "raw_log": "" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/cosmos/tx/v1beta1/txs/{hash}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "tx_response": { "txhash": hash, "code": 0, "raw_log": "" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/cosmwasm/wasm/v1/contract/.*/smart/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(state_lcd_body(2_000, 200)))
+            .mount(&server)
+            .await;
+
+        let cfg = test_cfg(&server.uri());
+        let signer = terra_tx::TerraSigner::new(terra_tx::TerraSignerConfig {
+            lcd_url: server.uri(),
+            chain_id: "localterra".into(),
+            mnemonic: cfg.terra_mnemonic.clone(),
+            gas_limit: Some(200_000),
+        })
+        .unwrap();
+        let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
+        assert!(!liveness.lock().unwrap().has_recorded_success());
+
+        let txh = submit_and_confirm_oracle_update(&cfg, &signer, proposed, &prior)
+            .await
+            .unwrap();
+        assert_eq!(txh, hash);
+        // Caller pattern from run_once:
+        liveness.lock().unwrap().record_successful_broadcast();
+        assert!(liveness.lock().unwrap().has_recorded_success());
+    }
+
+    #[tokio::test]
+    async fn deliver_tx_failure_does_not_allow_liveness() {
+        let server = MockServer::start().await;
+        let hash = "DELIVERFAIL";
+        let proposed = Uint128::new(2_000);
+        let prior = StateResponse {
+            rate: Uint128::new(1_000),
+            last_update_sec: 100,
+            utc_day_id: 1,
+            day_baseline_rate: Uint128::new(1_000),
+        };
+
+        mount_account(&server, 1).await;
+        Mock::given(method("POST"))
+            .and(path("/cosmos/tx/v1beta1/txs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "tx_response": { "txhash": hash, "code": 0, "raw_log": "" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/cosmos/tx/v1beta1/txs/{hash}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "tx_response": { "txhash": hash, "code": 9, "raw_log": "policy rejected" }
+            })))
+            .mount(&server)
+            .await;
+
+        let cfg = test_cfg(&server.uri());
+        let signer = terra_tx::TerraSigner::new(terra_tx::TerraSignerConfig {
+            lcd_url: server.uri(),
+            chain_id: "localterra".into(),
+            mnemonic: cfg.terra_mnemonic.clone(),
+            gas_limit: Some(200_000),
+        })
+        .unwrap();
+        let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
+
+        let err = submit_and_confirm_oracle_update(&cfg, &signer, proposed, &prior)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("DeliverTx failed"), "{err}");
+        assert!(!liveness.lock().unwrap().has_recorded_success());
+    }
+
+    #[tokio::test]
+    async fn state_mismatch_does_not_allow_liveness() {
+        let server = MockServer::start().await;
+        let hash = "STATEMISMATCH";
+        let proposed = Uint128::new(2_000);
+        let prior = StateResponse {
+            rate: Uint128::new(1_000),
+            last_update_sec: 100,
+            utc_day_id: 1,
+            day_baseline_rate: Uint128::new(1_000),
+        };
+
+        mount_account(&server, 1).await;
+        Mock::given(method("POST"))
+            .and(path("/cosmos/tx/v1beta1/txs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "tx_response": { "txhash": hash, "code": 0, "raw_log": "" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/cosmos/tx/v1beta1/txs/{hash}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "tx_response": { "txhash": hash, "code": 0, "raw_log": "" }
+            })))
+            .mount(&server)
+            .await;
+        // Inclusion ok but state unchanged / wrong rate (another operator race).
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/cosmwasm/wasm/v1/contract/.*/smart/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(state_lcd_body(1_500, 200)))
+            .mount(&server)
+            .await;
+
+        let cfg = test_cfg(&server.uri());
+        let signer = terra_tx::TerraSigner::new(terra_tx::TerraSignerConfig {
+            lcd_url: server.uri(),
+            chain_id: "localterra".into(),
+            mnemonic: cfg.terra_mnemonic.clone(),
+            gas_limit: Some(200_000),
+        })
+        .unwrap();
+        let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
+
+        let err = submit_and_confirm_oracle_update(&cfg, &signer, proposed, &prior)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("rate mismatch"), "{err}");
+        assert!(!liveness.lock().unwrap().has_recorded_success());
+    }
+
+    #[tokio::test]
+    async fn confirmation_timeout_does_not_allow_liveness() {
+        let server = MockServer::start().await;
+        let hash = "TIMEOUTTX";
+        let proposed = Uint128::new(2_000);
+        let prior = StateResponse {
+            rate: Uint128::new(1_000),
+            last_update_sec: 100,
+            utc_day_id: 1,
+            day_baseline_rate: Uint128::new(1_000),
+        };
+
+        mount_account(&server, 1).await;
+        Mock::given(method("POST"))
+            .and(path("/cosmos/tx/v1beta1/txs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "tx_response": { "txhash": hash, "code": 0, "raw_log": "" }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/cosmos/tx/v1beta1/txs/{hash}")))
+            .respond_with(ResponseTemplate::new(404).set_body_json(json!({
+                "message": "tx not found"
+            })))
+            .mount(&server)
+            .await;
+
+        let mut cfg = test_cfg(&server.uri());
+        cfg.tx_confirm_timeout_secs = 0;
+        cfg.tx_confirm_poll_interval_ms = 10;
+        // timeout 0 still allows one poll then fail; use 1s with short poll for reliability
+        cfg.tx_confirm_timeout_secs = 1;
+
+        let signer = terra_tx::TerraSigner::new(terra_tx::TerraSignerConfig {
+            lcd_url: server.uri(),
+            chain_id: "localterra".into(),
+            mnemonic: cfg.terra_mnemonic.clone(),
+            gas_limit: Some(200_000),
+        })
+        .unwrap();
+        let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
+
+        let err = submit_and_confirm_oracle_update(&cfg, &signer, proposed, &prior)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("confirmation timeout"), "{err}");
+        assert!(!liveness.lock().unwrap().has_recorded_success());
+    }
 }
