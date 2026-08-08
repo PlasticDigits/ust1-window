@@ -17,3 +17,6 @@ mod oracle_policy_tests;
 
 #[cfg(test)]
 mod cmm_native_wrap_integration;
+
+#[cfg(test)]
+mod cw20_minter_integration;

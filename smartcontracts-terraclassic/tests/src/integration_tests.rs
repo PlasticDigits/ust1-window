@@ -602,3 +602,174 @@ fn oracle_second_update_same_day_respects_throttle() {
     )
     .unwrap();
 }
+
+/// **INV-ORACLE-PAUSE-001**: oracle `State.paused` fails closed on deposit and withdraw while
+/// the rate is still age-fresh. Cross-links:
+/// [ust1-window#22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22),
+/// [ust1-window#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28),
+/// [`skills/oracle-circuit-breaker`](../../../skills/oracle-circuit-breaker/SKILL.md).
+#[test]
+fn oracle_paused_blocks_deposit_and_withdraw_while_rate_fresh() {
+    let WindowEnv {
+        mut app,
+        owner,
+        user,
+        treasury,
+        vfdusd,
+        ust1,
+        oracle,
+        window,
+        ..
+    } = setup_window_env();
+
+    commit_oracle_rate(&mut app, &oracle, &Addr::unchecked("bot"));
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(10_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: Uint128::from(1_000_000u128),
+            msg: to_json_binary(&window_msg::Cw20HookMsg::Deposit {}).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+    let ust1_bal: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            ust1.clone(),
+            &cw20::Cw20QueryMsg::Balance {
+                address: user.to_string(),
+            },
+        )
+        .unwrap();
+    assert!(ust1_bal.balance > Uint128::zero());
+    let treasury_bal: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            vfdusd.clone(),
+            &cw20::Cw20QueryMsg::Balance {
+                address: treasury.to_string(),
+            },
+        )
+        .unwrap();
+    assert!(treasury_bal.balance > Uint128::zero());
+
+    let st_before: oracle_msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(&oracle, &oracle_msg::QueryMsg::State {})
+        .unwrap();
+    assert!(!st_before.paused);
+    assert!(st_before.last_update_sec > 0);
+
+    app.execute_contract(
+        owner.clone(),
+        oracle.clone(),
+        &oracle_msg::ExecuteMsg::SetPaused { paused: true },
+        &[],
+    )
+    .unwrap();
+
+    let st_paused: oracle_msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(&oracle, &oracle_msg::QueryMsg::State {})
+        .unwrap();
+    assert!(st_paused.paused);
+    assert_eq!(st_paused.last_update_sec, st_before.last_update_sec);
+
+    let dep_err = app
+        .execute_contract(
+            user.clone(),
+            vfdusd.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: Uint128::from(100_000u128),
+                msg: to_json_binary(&window_msg::Cw20HookMsg::Deposit {}).unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        dep_err
+            .root_cause()
+            .to_string()
+            .contains("oracle is paused"),
+        "deposit unexpected: {dep_err}"
+    );
+
+    let wd_err = app
+        .execute_contract(
+            user.clone(),
+            ust1.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: ust1_bal.balance,
+                msg: to_json_binary(&window_msg::Cw20HookMsg::Withdraw {
+                    min_vfdusd_out: Uint128::zero(),
+                })
+                .unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        wd_err.root_cause().to_string().contains("oracle is paused"),
+        "withdraw unexpected: {wd_err}"
+    );
+
+    app.execute_contract(
+        owner.clone(),
+        oracle.clone(),
+        &oracle_msg::ExecuteMsg::SetPaused { paused: false },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: Uint128::from(100_000u128),
+            msg: to_json_binary(&window_msg::Cw20HookMsg::Deposit {}).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let ust1_after: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            ust1.clone(),
+            &cw20::Cw20QueryMsg::Balance {
+                address: user.to_string(),
+            },
+        )
+        .unwrap();
+    app.execute_contract(
+        user,
+        ust1,
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: ust1_after.balance,
+            msg: to_json_binary(&window_msg::Cw20HookMsg::Withdraw {
+                min_vfdusd_out: Uint128::zero(),
+            })
+            .unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+}

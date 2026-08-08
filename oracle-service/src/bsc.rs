@@ -138,3 +138,118 @@ pub async fn read_exchange_rate_stored(
     let s = v.to_string();
     cosmwasm_std::Uint128::from_str(&s).map_err(|_| eyre!("rate does not fit Uint128: {}", s))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::time::Instant;
+    use wiremock::matchers::{body_string_contains, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const VTOKEN: &str = "0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba";
+
+    /// **INV-ORACLE-TICK-001** / M-19 ([GitLab #28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28)):
+    /// BSC JSON-RPC must fail within the configured transport timeout, not hang the tick.
+    #[tokio::test]
+    async fn read_exchange_rate_stored_times_out_on_hanging_rpc() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(5))
+                    .set_body_json(json!({"jsonrpc":"2.0","id":1,"result":"0x1"})),
+            )
+            .mount(&server)
+            .await;
+
+        let start = Instant::now();
+        let err = read_exchange_rate_stored(server.uri(), VTOKEN, 0, &[31337], 1)
+            .await
+            .unwrap_err();
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "expected fail-fast within ~1s transport timeout, took {:?}",
+            elapsed
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("eth_chainId") || msg.contains("timeout") || msg.contains("timed out"),
+            "expected transport/chainId error, got: {msg}"
+        );
+    }
+
+    /// Chain-id and block reads succeed; `eth_call` hangs — still bounded by `rpc_timeout_secs`.
+    #[tokio::test]
+    async fn read_exchange_rate_stored_times_out_when_eth_call_hangs() {
+        let server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(body_string_contains("eth_chainId"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": "0x7a69"
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(body_string_contains("eth_blockNumber"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": "0x64"
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(body_string_contains("eth_call"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(5))
+                    .set_body_json(json!({"jsonrpc":"2.0","id":1,"result":"0x0"})),
+            )
+            .mount(&server)
+            .await;
+
+        let start = Instant::now();
+        let err = read_exchange_rate_stored(server.uri(), VTOKEN, 0, &[31337], 1)
+            .await
+            .unwrap_err();
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "eth_call hang should be bounded by transport timeout"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("vToken call") || msg.contains("timeout") || msg.contains("timed out"),
+            "expected eth_call/timeout error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_all_bsc_rpc_urls_fails_fast_on_hanging_url() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(5)))
+            .mount(&server)
+            .await;
+
+        let start = Instant::now();
+        let err = verify_all_bsc_rpc_urls(&[server.uri()], &[31337], 1)
+            .await
+            .unwrap_err();
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "startup chain-id probe must not block on hanging RPC"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("eth_chainId") || msg.contains("timeout") || msg.contains("timed out"),
+            "expected chainId/timeout error, got: {msg}"
+        );
+    }
+}

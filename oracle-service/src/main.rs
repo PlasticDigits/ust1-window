@@ -19,8 +19,41 @@ use cosmwasm_std::Uint128;
 use eyre::Result;
 use tokio::signal;
 use tracing::{error, info, warn};
-use ust1_common::oracle_policy::check_rate_update;
+use ust1_common::oracle_policy::{check_rate_update, OraclePolicyError};
 use ust1_oracle::msg::{ExecuteMsg, QueryMsg, StateResponse};
+
+/// Outcome of the pure tick decision step (C-3 / **INV-ORACLE-LIVENESS-001**).
+///
+/// Liveness is recorded only on [`TickAction::Submit`] after DeliverTx + state confirm
+/// ([GitLab #28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28),
+/// `skills/oracle-liveness-confirm/SKILL.md`, `skills/audit-hardening-bundle/SKILL.md`).
+#[derive(Debug, PartialEq, Eq)]
+enum TickAction {
+    SkipPaused,
+    SkipEqualRate,
+    SkipPolicy(OraclePolicyError),
+    Submit { day_id: u64, baseline: Uint128 },
+}
+
+fn decide_tick_action(proposed: Uint128, state: &StateResponse, now: u64) -> TickAction {
+    if state.paused {
+        return TickAction::SkipPaused;
+    }
+    if proposed == state.rate {
+        return TickAction::SkipEqualRate;
+    }
+    match check_rate_update(
+        now,
+        state.last_update_sec,
+        state.rate,
+        proposed,
+        state.utc_day_id,
+        state.day_baseline_rate,
+    ) {
+        Ok((day_id, baseline)) => TickAction::Submit { day_id, baseline },
+        Err(e) => TickAction::SkipPolicy(e),
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -57,7 +90,6 @@ async fn main() -> Result<()> {
     }
 
     let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
-    let max_silence = Duration::from_secs(cfg.max_silence_since_broadcast_secs);
 
     info!(
         address = %signer.address_str(),
@@ -72,15 +104,34 @@ async fn main() -> Result<()> {
          liveness = confirmed DeliverTx + State — C-3/#23)"
     );
 
+    operator_loop(&cfg, &signer, &liveness, Box::pin(shutdown_signal())).await
+}
+
+/// Main operator loop: poll BSC, update oracle, honor graceful shutdown (L-10 / [GitLab #28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28)).
+///
+/// When the shutdown future completes, `select!` breaks out immediately with `Ok(())`.
+/// An in-flight tick body may still run to completion depending on which branch wins the race;
+/// after shutdown fires we do not start another tick.
+async fn operator_loop<F>(
+    cfg: &config::Config,
+    signer: &terra_tx::TerraSigner,
+    liveness: &Arc<Mutex<liveness::LivenessTracker>>,
+    mut shutdown: F,
+) -> Result<()>
+where
+    F: std::future::Future<Output = ()> + Unpin,
+{
+    let max_silence = Duration::from_secs(cfg.max_silence_since_broadcast_secs);
+
     loop {
         tokio::select! {
-            _ = shutdown_signal() => {
+            _ = &mut shutdown => {
                 info!("shutdown signal received; exiting gracefully");
                 break;
             }
             _ = async {
                 {
-                    let tracker = liveness::lock_liveness_arc(&liveness);
+                    let tracker = liveness::lock_liveness_arc(liveness);
                     if tracker.should_alert(max_silence) {
                         let silence_secs = tracker.silence_since_last_broadcast().as_secs();
                         error!(
@@ -97,7 +148,7 @@ async fn main() -> Result<()> {
 
                 match tokio::time::timeout(
                     Duration::from_secs(cfg.tick_timeout_secs),
-                    run_once(&cfg, &signer, &liveness),
+                    run_once(cfg, signer, liveness),
                 )
                 .await
                 {
@@ -118,6 +169,14 @@ async fn main() -> Result<()> {
 }
 
 async fn shutdown_signal() {
+    shutdown_signal_with_hook(std::future::pending::<()>()).await
+}
+
+/// Injectable shutdown hook for unit tests; production passes `pending()` and relies on OS signals.
+async fn shutdown_signal_with_hook<H>(mut hook: H)
+where
+    H: std::future::Future<Output = ()> + Unpin,
+{
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
@@ -127,11 +186,15 @@ async fn shutdown_signal() {
             _ = signal::ctrl_c() => {}
             _ = sigterm.recv() => {}
             _ = sigint.recv() => {}
+            _ = &mut hook => {}
         }
     }
     #[cfg(not(unix))]
     {
-        signal::ctrl_c().await.expect("ctrl_c handler");
+        tokio::select! {
+            _ = signal::ctrl_c() => {}
+            _ = &mut hook => {}
+        }
     }
 }
 
@@ -157,32 +220,29 @@ async fn run_once(
         .query_wasm_smart(&cfg.oracle_contract, &QueryMsg::State {})
         .await?;
 
-    // INV-ORACLE-PAUSE-001: governance circuit breaker — do not burn fees on UpdateRate.
-    // Service does not auto-unpause; ops use DEPLOYMENT emergency pause runbook (#22).
-    if state.paused {
-        warn!(
-            event = "oracle_paused",
-            "on-chain oracle is paused (circuit breaker); skipping UpdateRate"
-        );
-        return Ok(());
-    }
-
-    if proposed == state.rate {
-        info!("no rate change from BSC");
-        return Ok(());
-    }
-
-    let check = check_rate_update(
-        now_unix(),
-        state.last_update_sec,
-        state.rate,
-        proposed,
-        state.utc_day_id,
-        state.day_baseline_rate,
-    );
-
-    match check {
-        Ok((day_id, baseline)) => {
+    match decide_tick_action(proposed, &state, now_unix()) {
+        TickAction::SkipPaused => {
+            // INV-ORACLE-PAUSE-001: governance circuit breaker — do not burn fees on UpdateRate.
+            // Service does not auto-unpause; ops use DEPLOYMENT emergency pause runbook (#22).
+            warn!(
+                event = "oracle_paused",
+                "on-chain oracle is paused (circuit breaker); skipping UpdateRate"
+            );
+        }
+        TickAction::SkipEqualRate => {
+            info!("no rate change from BSC");
+        }
+        TickAction::SkipPolicy(e) => {
+            info!(
+                event = "check_rate_update",
+                outcome = "failed",
+                error = ?e,
+                proposed = %proposed,
+                current = %state.rate,
+                "skip update (policy rejection)"
+            );
+        }
+        TickAction::Submit { day_id, baseline } => {
             info!(
                 event = "check_rate_update",
                 outcome = "ok",
@@ -192,21 +252,12 @@ async fn run_once(
                 "policy allows oracle update"
             );
             let txh = submit_and_confirm_oracle_update(cfg, signer, proposed, &state).await?;
+            // INV-ORACLE-LIVENESS-001: only confirmed DeliverTx + State (C-3 / #23, #28).
             liveness::lock_liveness_arc(liveness).record_successful_broadcast();
             info!(
                 tx_hash = %txh,
                 new_rate = %proposed,
                 "confirmed on-chain oracle update"
-            );
-        }
-        Err(e) => {
-            info!(
-                event = "check_rate_update",
-                outcome = "failed",
-                error = ?e,
-                proposed = %proposed,
-                current = %state.rate,
-                "skip update (policy rejection)"
             );
         }
     }
@@ -607,5 +658,355 @@ mod tests {
         .await
         .is_err();
         assert!(timed_out);
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use tokio::sync::oneshot;
+
+    const TEST_MNEMONIC: &str =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    fn shutdown_test_cfg() -> config::Config {
+        config::Config {
+            bsc_rpc_urls: vec![
+                "http://127.0.0.1:8545".into(),
+                "http://127.0.0.1:8546".into(),
+            ],
+            bsc_confirmation_blocks: 0,
+            bsc_rpc_timeout_secs: 30,
+            allowed_bsc_chain_ids: vec![31337],
+            venus_vtoken_address: "0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba".into(),
+            terra_lcd_url: "http://127.0.0.1:1".into(),
+            terra_chain_id: "localterra".into(),
+            terra_mnemonic: secrecy::SecretString::new(TEST_MNEMONIC.to_string().into_boxed_str()),
+            terra_gas_price: terra_tx::DEFAULT_GAS_PRICE,
+            oracle_contract: "terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n"
+                .into(),
+            poll_interval_secs: 86_400,
+            tick_timeout_secs: 120,
+            max_silence_since_broadcast_secs: 28_800,
+            tx_confirm_timeout_secs: 2,
+            tx_confirm_poll_interval_ms: 20,
+            healthz_bind: String::new(),
+        }
+    }
+
+    /// L-10 / [GitLab #28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28): injectable hook
+    /// mirrors the SIGTERM/SIGINT/ctrl_c select arm without sending signals to the test runner.
+    #[tokio::test]
+    async fn operator_loop_exits_on_shutdown_hook() {
+        let (tx, rx) = oneshot::channel::<()>();
+        let _ = tx.send(());
+        let shutdown = Box::pin(async {
+            let _ = rx.await;
+        });
+
+        let cfg = shutdown_test_cfg();
+        let signer = terra_tx::TerraSigner::new(terra_tx::TerraSignerConfig {
+            lcd_url: cfg.terra_lcd_url.clone(),
+            chain_id: cfg.terra_chain_id.clone(),
+            mnemonic: cfg.terra_mnemonic.clone(),
+            gas_limit: None,
+            gas_price: cfg.terra_gas_price,
+        })
+        .unwrap();
+        let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            operator_loop(&cfg, &signer, &liveness, shutdown),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "operator_loop should exit promptly on shutdown hook"
+        );
+        assert!(result.unwrap().is_ok());
+    }
+
+    #[tokio::test]
+    async fn shutdown_signal_with_hook_completes_when_hook_fires() {
+        let (tx, rx) = oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            shutdown_signal_with_hook(Box::pin(async {
+                let _ = rx.await;
+            }))
+            .await;
+        });
+        tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), handle)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod run_once_tests {
+    use super::*;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use secrecy::SecretString;
+    use serde_json::json;
+    use ust1_common::MIN_ORACLE_UPDATE_INTERVAL_SECS;
+    use wiremock::matchers::{body_string_contains, method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const TEST_MNEMONIC: &str =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const CONTRACT: &str = "terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n";
+    const VTOKEN: &str = "0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba";
+
+    fn run_once_cfg(bsc_urls: Vec<String>, lcd: &str) -> config::Config {
+        config::Config {
+            bsc_rpc_urls: bsc_urls,
+            bsc_confirmation_blocks: 0,
+            bsc_rpc_timeout_secs: 5,
+            allowed_bsc_chain_ids: vec![31337],
+            venus_vtoken_address: VTOKEN.into(),
+            terra_lcd_url: lcd.to_string(),
+            terra_chain_id: "localterra".into(),
+            terra_mnemonic: SecretString::new(TEST_MNEMONIC.to_string().into_boxed_str()),
+            terra_gas_price: terra_tx::DEFAULT_GAS_PRICE,
+            oracle_contract: CONTRACT.into(),
+            poll_interval_secs: 60,
+            tick_timeout_secs: 120,
+            max_silence_since_broadcast_secs: 28_800,
+            tx_confirm_timeout_secs: 2,
+            tx_confirm_poll_interval_ms: 20,
+            healthz_bind: String::new(),
+        }
+    }
+
+    fn state_lcd_body(rate: u128, last_update_sec: u64, paused: bool) -> serde_json::Value {
+        let st = StateResponse {
+            rate: Uint128::new(rate),
+            last_update_sec,
+            utc_day_id: 1,
+            day_baseline_rate: Uint128::new(rate),
+            paused,
+        };
+        json!({ "data": STANDARD.encode(serde_json::to_vec(&st).unwrap()) })
+    }
+
+    async fn mount_bsc_rpc(server: &MockServer, rate: u128) {
+        let rate_hex = format!("0x{:064x}", rate);
+
+        Mock::given(method("POST"))
+            .and(body_string_contains("eth_chainId"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": "0x7a69"
+            })))
+            .mount(server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(body_string_contains("eth_blockNumber"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": "0x64"
+            })))
+            .mount(server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(body_string_contains("eth_call"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": rate_hex
+            })))
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_lcd_state(server: &MockServer, rate: u128, last_update_sec: u64) {
+        Mock::given(method("GET"))
+            .and(path_regex(r"^/cosmwasm/wasm/v1/contract/.*/smart/.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(state_lcd_body(
+                rate,
+                last_update_sec,
+                false,
+            )))
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_no_broadcast(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/cosmos/tx/v1beta1/txs"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(server)
+            .await;
+    }
+
+    fn test_signer(lcd: &str, mnemonic: &SecretString) -> terra_tx::TerraSigner {
+        terra_tx::TerraSigner::new(terra_tx::TerraSignerConfig {
+            lcd_url: lcd.to_string(),
+            chain_id: "localterra".into(),
+            mnemonic: mnemonic.clone(),
+            gas_limit: Some(200_000),
+            gas_price: terra_tx::DEFAULT_GAS_PRICE,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn decide_tick_action_equal_rate_skips() {
+        let rate = Uint128::new(1_000_000);
+        let state = StateResponse {
+            rate,
+            last_update_sec: 100,
+            utc_day_id: 1,
+            day_baseline_rate: rate,
+            paused: false,
+        };
+        assert_eq!(
+            decide_tick_action(rate, &state, 200),
+            TickAction::SkipEqualRate
+        );
+    }
+
+    #[test]
+    fn decide_tick_action_paused_skips() {
+        let rate = Uint128::new(1_000_000);
+        let state = StateResponse {
+            rate,
+            last_update_sec: 100,
+            utc_day_id: 1,
+            day_baseline_rate: rate,
+            paused: true,
+        };
+        assert_eq!(
+            decide_tick_action(Uint128::new(2_000_000), &state, 200),
+            TickAction::SkipPaused
+        );
+    }
+
+    #[test]
+    fn decide_tick_action_update_too_soon() {
+        let rate = Uint128::new(1_000_000);
+        let now = 100_000u64;
+        let state = StateResponse {
+            rate,
+            last_update_sec: now - 100,
+            utc_day_id: 1,
+            day_baseline_rate: rate,
+            paused: false,
+        };
+        assert_eq!(
+            decide_tick_action(Uint128::new(1_000_001), &state, now),
+            TickAction::SkipPolicy(OraclePolicyError::UpdateTooSoon {
+                min_interval: MIN_ORACLE_UPDATE_INTERVAL_SECS,
+            })
+        );
+    }
+
+    #[test]
+    fn decide_tick_action_rate_decreased() {
+        let rate = Uint128::new(1_000_000);
+        let now = 100_000u64;
+        let state = StateResponse {
+            rate,
+            last_update_sec: now - MIN_ORACLE_UPDATE_INTERVAL_SECS - 10,
+            utc_day_id: 1,
+            day_baseline_rate: rate,
+            paused: false,
+        };
+        assert_eq!(
+            decide_tick_action(Uint128::new(999_000), &state, now),
+            TickAction::SkipPolicy(OraclePolicyError::RateDecreased)
+        );
+    }
+
+    #[test]
+    fn decide_tick_action_daily_cap_exceeded() {
+        let rate = Uint128::new(1_000_000);
+        let now = 100_000u64;
+        let state = StateResponse {
+            rate,
+            last_update_sec: now - MIN_ORACLE_UPDATE_INTERVAL_SECS - 10,
+            utc_day_id: 1,
+            day_baseline_rate: rate,
+            paused: false,
+        };
+        assert_eq!(
+            decide_tick_action(Uint128::new(1_030_000), &state, now),
+            TickAction::SkipPolicy(OraclePolicyError::DailyCapExceeded)
+        );
+    }
+
+    /// **INV-ORACLE-LIVENESS-001** / C-3 ([GitLab #28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28)):
+    /// equal BSC rate must not broadcast or record liveness.
+    #[tokio::test]
+    async fn run_once_equal_rate_does_not_record_liveness() {
+        let bsc0 = MockServer::start().await;
+        let bsc1 = MockServer::start().await;
+        let lcd = MockServer::start().await;
+        let rate = 1_000_000u128;
+
+        mount_bsc_rpc(&bsc0, rate).await;
+        mount_bsc_rpc(&bsc1, rate).await;
+        mount_lcd_state(&lcd, rate, 100).await;
+        mount_no_broadcast(&lcd).await;
+
+        let cfg = run_once_cfg(vec![bsc0.uri(), bsc1.uri()], &lcd.uri());
+        let signer = test_signer(&lcd.uri(), &cfg.terra_mnemonic);
+        let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
+
+        run_once(&cfg, &signer, &liveness).await.unwrap();
+        assert!(!liveness.lock().unwrap().has_recorded_success());
+    }
+
+    /// Policy throttle skip must not broadcast or record liveness.
+    #[tokio::test]
+    async fn run_once_policy_throttle_does_not_record_liveness() {
+        let bsc0 = MockServer::start().await;
+        let bsc1 = MockServer::start().await;
+        let lcd = MockServer::start().await;
+        let rate = 1_000_000u128;
+        let proposed = rate + 1;
+
+        mount_bsc_rpc(&bsc0, proposed).await;
+        mount_bsc_rpc(&bsc1, proposed).await;
+        let now = now_unix();
+        mount_lcd_state(&lcd, rate, now - 100).await;
+        mount_no_broadcast(&lcd).await;
+
+        let cfg = run_once_cfg(vec![bsc0.uri(), bsc1.uri()], &lcd.uri());
+        let signer = test_signer(&lcd.uri(), &cfg.terra_mnemonic);
+        let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
+
+        run_once(&cfg, &signer, &liveness).await.unwrap();
+        assert!(!liveness.lock().unwrap().has_recorded_success());
+    }
+
+    /// Monotonic decrease skip must not broadcast or record liveness.
+    #[tokio::test]
+    async fn run_once_mono_decrease_does_not_record_liveness() {
+        let bsc0 = MockServer::start().await;
+        let bsc1 = MockServer::start().await;
+        let lcd = MockServer::start().await;
+        let rate = 1_000_000u128;
+        let proposed = rate - 1;
+
+        mount_bsc_rpc(&bsc0, proposed).await;
+        mount_bsc_rpc(&bsc1, proposed).await;
+        let now = now_unix();
+        mount_lcd_state(&lcd, rate, now - MIN_ORACLE_UPDATE_INTERVAL_SECS - 10).await;
+        mount_no_broadcast(&lcd).await;
+
+        let cfg = run_once_cfg(vec![bsc0.uri(), bsc1.uri()], &lcd.uri());
+        let signer = test_signer(&lcd.uri(), &cfg.terra_mnemonic);
+        let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
+
+        run_once(&cfg, &signer, &liveness).await.unwrap();
+        assert!(!liveness.lock().unwrap().has_recorded_success());
     }
 }

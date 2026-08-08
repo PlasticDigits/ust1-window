@@ -1,4 +1,4 @@
-.PHONY: start stop reset wait-healthy test-contracts build-optimized deploy-local verify-oracle-env verify-treasury-wire install-hooks precommit help
+.PHONY: start stop reset wait-healthy test-contracts test-localterra-smoke build-optimized deploy-local verify-oracle-env verify-treasury-wire install-hooks precommit help
 
 start:
 	docker compose up -d
@@ -23,6 +23,10 @@ wait-healthy:
 test-contracts:
 	cargo test -p ust1-common -p ust1-oracle -p ust1-window -p cmm-native-wrap -p ust1-integration-tests
 
+# TEST-16 / #28: skip-clean when LocalTerra LCD is down; see docs/DEPLOYMENT.md.
+test-localterra-smoke:
+	bash scripts/localterra_e2e_smoke.sh
+
 build-optimized:
 	chmod +x scripts/optimize.sh && ./scripts/optimize.sh
 
@@ -44,7 +48,7 @@ precommit:
 
 help:
 	@echo "make start | stop | reset | wait-healthy"
-	@echo "make test-contracts | build-optimized | deploy-local | verify-oracle-env"
+	@echo "make test-contracts | test-localterra-smoke | build-optimized | deploy-local | verify-oracle-env"
 	@echo "make verify-treasury-wire   (ustr-cmm InstantWithdrawCw20 golden / issue #21)"
 	@echo "make install-hooks | precommit   (requires: pip install pre-commit)"
 	@echo "Deployment guide: docs/DEPLOYMENT.md"
