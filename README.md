@@ -4,7 +4,7 @@ Monorepo for Terra Classic **UST1** swap tooling against bridged Venus **vFDUSD*
 
 ## Mainnet status (`columbus-5`)
 
-Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). Post-deploy wiring (`add_minter`, window migrate + treasury `SetCw20Spender` for InstantWithdrawCw20, first `UpdateRate`, oracle service) still pending — full operator registry in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Redeem path: [GitLab #20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20). Wire-format pin vs ustr-cmm: [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21).
+Tokens + oracle/window live on mainnet ([GitLab #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). Window migrated to InstantWithdrawCw20 code **11566**; UST1 `add_minter(window)` and treasury `SetCw20Spender` (+ `limit_24h`) done. Still pending: first `UpdateRate`, oracle service, live withdraw probe — full operator registry in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Redeem path: [GitLab #20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20). Wire-format pin vs ustr-cmm: [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21).
 
 ### Contracts & tokens
 
@@ -12,10 +12,10 @@ Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/Pla
 |-------|---------|---------|-------|
 | cw20-mintable | — | **10184** | Shared CW20 code |
 | **vFDUSD** (bridged CW20) | `terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3` | 10184 | Decimals **6**; minter = CL8Y Terra bridge |
-| **UST1** | `terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72` | 10184 | Decimals **6**; minter = governance (window `add_minter` pending) |
+| **UST1** | `terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72` | 10184 | Decimals **6**; minters include window `terra1zxwp…` |
 | **ust1-oracle** | `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` | **11549** | Operator `terra1hm3ph0jevtkuc9efj9q3ld3ktk3g6la3ruhqna`; initial rate `1e18` |
-| **ust1-window** | `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` | **11550** | `fee_bps=100`; per-tx **1000** / rolling 24h **10000** UST1; CMM treasury default |
-| CMM treasury (ustr-cmm) | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | — | **Contract**; window redeem via `InstantWithdrawCw20` after gov `SetCw20Spender` ([#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20)) |
+| **ust1-window** | `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` | **11566** | InstantWithdrawCw20; `fee_bps=100`; per-tx **1000** / rolling 24h **10000** UST1; migrated from **11550** |
+| CMM treasury (ustr-cmm) | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | **11564** | **Contract**; window registered spender + `limit_24h=10000000000` ([#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20)) |
 | CL8Y Terra bridge | `terra18m02l2f43c2dagqnz3kfccpgz9pzzz5hk9l5mh5wvr6dcvv47zfqdfs7la` | — | vFDUSD minter; BSC↔Terra registered |
 
 ### Roles & BSC

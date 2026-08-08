@@ -1,0 +1,21 @@
+# Keep oracle-service image builds small / fast.
+.git
+.github
+.gitlab-ci.yml
+.cursor
+.venv
+.env
+.env.*
+**/target
+/artifacts
+audits
+docs
+skills
+scripts
+Makefile
+docker-compose.yml
+*.md
+proptest-regressions
+**/*.wasm
+**/schemata
+**/*.pdf

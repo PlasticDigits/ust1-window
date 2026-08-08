@@ -106,33 +106,33 @@ Terra Classic is easy to get wrong if you copy “generic Cosmos” snippets. Pr
 1. **Always pin the node:** `--node https://…:443` (or your provider’s Tendermint RPC). Queries and broadcasts must hit a node you trust.
 2. **Always set chain id:** `--chain-id columbus-5` for mainnet.
 3. **Use automatic gas *with* headroom:** `--gas auto --gas-adjustment 1.5` (instantiate) or **`1.8`–`2.5`** for `wasm store` of large binaries when simulation underestimates.
-4. **Always attach an explicit fee budget in `uluna`:** `--fees <N>uluna`.  
-   Naive `--gas auto` without a sufficient fee cap often yields `insufficient fees` or flaky simulation. The CL8Y deployment guide uses **`--fees 10000000uluna`** for many executes; **`wasm store`** commonly needs **more** (try `50000000uluna`–`150000000uluna` and increase if the node still rejects).
-5. **Keyring:** use the same `--keyring-backend` as your imports (this ops setup uses **`file`** — see `~/.terra/config/client.toml`). Do not pass `os` if keys live under `keyring-file`.
-6. **Broadcast mode:** `--broadcast-mode sync` (or `block`) so you can inspect the tx result immediately.
+4. **Prefer `--gas-prices 28.325uluna` with `--gas auto`** for store/migrate (matches mainnet min-gas-price). Fixed `--fees` also works but under-budget fails hard: e.g. `80000000uluna` was rejected when estimate needed ~`91894401uluna`. Executes often use **`--fees 10000000uluna`**; large **`wasm store`** may need **`120000000uluna`+** if not using gas-prices.
+5. **Keyring:** use the same `--keyring-backend` as your imports (this ops setup uses **`file`** — see `~/.terra/config/client.toml`). Do not pass `os` if keys live under `keyring-file`. Password-locked keys: pipe the passphrase twice (sim + sign), e.g. `printf '%s\n%s\n' "$PASS" "$PASS" | terrad tx …`, or set `TERRA_KEYRING_PASSWORD` when using ustr-cmm `treasury-migrate-wrap-wire.sh`.
+6. **Broadcast mode:** `--broadcast-mode sync` (or `block`) so you can inspect the tx result immediately. Sync responses often have empty `events` — query the `txhash` (or LCD) for `code_id` / migrate confirmation.
 
 **Wasm `store` example:**
 
 ```bash
-export FEES_ULUNA=80000000   # fee *amount* in uluna, not gas units; raise if needed
-
 terrad tx wasm store artifacts/ust1_oracle.wasm \
   --from "$TERRA_KEY_NAME" \
   --chain-id columbus-5 \
   --node "$TERRA_RPC" \
-  --gas auto --gas-adjustment 2.0 \
-  --fees "${FEES_ULUNA}uluna" \
+  --gas auto --gas-adjustment 1.5 \
+  --gas-prices 28.325uluna \
   --keyring-backend file \
   --broadcast-mode sync -y
 ```
 
-After each tx, record **`code_id`** (for store) or **`_contract_address`** (for instantiate) from events.
+After each tx, record **`code_id`** (for store) or **`_contract_address`** (for instantiate) from the confirmed tx events (`terrad query tx <hash>` or LCD).
 
-**Queries** use the same `--node` (RPC URLs work for `query` in current Terra Classic tooling):
+**Queries** use the same `--node` (RPC URLs work for `query` in current Terra Classic tooling). If `terrad query wasm contract` fails with a proto decode error (`wiretype end group for non-group`), use LCD instead:
 
 ```bash
 terrad query wasm contract-state smart "$ORACLE_ADDR" '{"state":{}}' \
   --chain-id columbus-5 --node "$TERRA_RPC"
+
+# Fallback for contract metadata (code_id / admin):
+curl -sS "$TERRA_LCD/cosmwasm/wasm/v1/contract/$WINDOW_ADDR" | jq .
 ```
 
 ---
@@ -178,10 +178,16 @@ export TERRA_KEY_NAME="cl8ydeploy"          # terra1hu4zggf3f8yw6jw3rxrjxn2drwad
 export TERRA_ADMIN="terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l"
 export GOVERNANCE_ADDR="terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l"
 export TERRA_BRIDGE_ADMIN_KEY="cl8y2_admin"  # terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l
+export GOVERNANCE_KEY="cl8y2_admin"          # same address; migrate / add_minter / SetCw20Spender
 export KEYRING_BACKEND="file"               # matches ~/.terra/config/client.toml
 
 export TERRA_BRIDGE_ADDRESS="terra18m02l2f43c2dagqnz3kfccpgz9pzzz5hk9l5mh5wvr6dcvv47zfqdfs7la"
 export CW20_MINTABLE_CODE_ID="10184"
+export ORACLE_ADDR="terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n"
+export WINDOW_ADDR="terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2"
+export CMM_TREASURY="terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2"
+export UST1_ORACLE_CODE_ID="11549"
+export UST1_WINDOW_CODE_ID="11566"          # InstantWithdrawCw20 (was 11550 at instantiate)
 
 export BSC_RPC="https://bsc-dataseed1.binance.org"
 export BSC_TOKEN_REGISTRY="0x3d8820ec93748fd4df8eee6b763834a23938b207"
@@ -232,13 +238,14 @@ Venus vFDUSD on BSC is **LockUnlock** (`registerToken` type **`0`**). Terra CW20
 
 ### UST1 stack (this repo)
 
-- [ ] `make build-optimized` at the git revision you intend to ship; record git SHA.
-- [ ] `wasm store` `artifacts/ust1_oracle.wasm`, `artifacts/ust1_window.wasm` → code IDs.
+- [x] `make build-optimized` for InstantWithdrawCw20 window wasm (sha256 `469e0b9f…ebc9`).
+- [x] `wasm store` InstantWithdraw `ust1_window.wasm` → code id **11566** (tx `AA40BE6A…037E`); oracle store remains **11549**.
 - [x] Instantiate **`ust1-oracle`** — `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` (code **11549**).
-- [x] Instantiate **`ust1-window`** — `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` (code **11550**; approved fee/limits; default CMM treasury).
-- [ ] **UST1 minters:** from governance, execute cw20-mintable **`add_minter`** for **`ust1-window`** (see integration tests in `ust1-integration-tests`).
-- [ ] **Treasury / withdraw inventory (Option 3):** migrate window to InstantWithdrawCw20 code; treasury gov `SetCw20Spender` (+ `limit_24h`) for vFDUSD → window (see Phase 5). Depends on [ustr-cmm#6](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/6) / [#7](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/7) and [ust1-window#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20). Schema pin / CI: [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21).
-- [ ] **Pre-announce:** schema conformance green at pin rev; **live withdraw probe** tx recorded (Phase 5 §2 step 4).
+- [x] Instantiate **`ust1-window`** — `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` (originally code **11550**; approved fee/limits; default CMM treasury).
+- [x] **Migrate window** to InstantWithdrawCw20 code **11566** (tx `5C2A5CAF…1227`; admin `cl8y2_admin` / `terra1xsecn…`).
+- [x] **UST1 minters:** window `terra1zxwp…` is in UST1 `minters` (governance self-mint cleanup / INV-MINTER-001 still optional).
+- [x] **Treasury / withdraw inventory (Option 3):** treasury code **11564**; `SetCw20Spender` + `limit_24h=10000000000` for vFDUSD → window (see Phase 5). Schema pin / CI: [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21).
+- [ ] **Pre-announce:** schema conformance green at pin rev; **live withdraw probe** tx recorded (Phase 5 §2 step 4) — needs treasury vFDUSD inventory + first `UpdateRate`.
 - [ ] **Governance handoff:** if required, run `ProposeGovernance` / `AcceptGovernance` on oracle and window.
 - [ ] **First oracle commit:** `oracle_operator` sends `UpdateRate` consistent with policy (service will continue updates).
 
@@ -246,10 +253,11 @@ Venus vFDUSD on BSC is **LockUnlock** (`registerToken` type **`0`**). Terra CW20
 
 - [ ] If wrapping **uluna/uusd**, deploy `cmm-native-wrap` per [`cmm-native-wrap`](../contracts/cmm-native-wrap) and your governance playbook (no oracle).
 
-### Oracle service (Render, no YAML)
+### Oracle service (Coolify Dockerfile or Render)
 
-- [ ] Create Render resources via **dashboard** (see [Render dashboard setup](#render-dashboard-setup-no-renderyaml)).
-- [ ] Set **all** env vars; run `scripts/verify_oracle_operator_env.sh` locally with the same values before applying.
+- [ ] Create Coolify app from root [`Dockerfile`](../Dockerfile) (see [Coolify / Render](#oracle-host-coolify-dockerfile-or-render)) — or Render Background Worker.
+- [ ] Set **all** env vars; run `scripts/verify_oracle_operator_env.sh` locally with the same values before applying. `TERRA_MNEMONIC` → `terra1hm3ph…`.
+
 - [ ] Confirm `POLL_INTERVAL_SECS` ≪ on-chain / intended `max_oracle_age_sec` (default poll **3600**, window default age **21600**).
 - [ ] Confirm `ORACLE_MAX_SILENCE_SECS` ≤ `max_oracle_age` (default **21600**); avoid silence ≫ `max_age + poll`.
 - [ ] Confirm logs show `poll_interval_secs` / `max_silence_since_broadcast_secs` at startup, then periodic polls and successful broadcasts after deploy.
@@ -318,7 +326,7 @@ terrad query wasm contract-state smart "$TERRA_VFDUSD" '{"token_info":{}}' \
 
 ### Instantiate UST1 (governance minter first)
 
-Window is **not** a minter yet — add it in Phase 5 after `ust1-window` exists.
+Mainnet: window is already an UST1 minter. Historical instantiate used governance as the primary minter first, then Phase 5 `add_minter(window)`.
 
 ```bash
 terrad tx wasm instantiate "$CW20_MINTABLE_CODE_ID" \
@@ -425,16 +433,19 @@ Smoke with a **minimal** BSC→Terra lock/mint before announcing. Full CL8Y patt
 
 ### Store
 
+Mainnet InstantWithdraw window wasm is already stored as code id **11566** (see [address registry](#address-registry-template)). Prefer `--gas-prices` (fixed `--fees 80000000uluna` underpays at ~28.325 uluna/gas).
+
 ```bash
 terrad tx wasm store artifacts/ust1_oracle.wasm \
   --from "$TERRA_KEY_NAME" --chain-id columbus-5 --node "$TERRA_RPC" \
-  --gas auto --gas-adjustment 2.0 --fees 80000000uluna \
+  --gas auto --gas-adjustment 1.5 --gas-prices 28.325uluna \
   --keyring-backend file --broadcast-mode sync -y
 
 terrad tx wasm store artifacts/ust1_window.wasm \
-  --from "$TERRA_KEY_NAME" --chain-id columbus-5 --node "$TERRA_RPC" \
-  --gas auto --gas-adjustment 2.0 --fees 80000000uluna \
+  --from "$GOVERNANCE_KEY" --chain-id columbus-5 --node "$TERRA_RPC" \
+  --gas auto --gas-adjustment 1.5 --gas-prices 28.325uluna \
   --keyring-backend file --broadcast-mode sync -y
+# mainnet: code 11566 — tx AA40BE6AD52295F8D1ABF4352ECEDBB8D99F3BBE23AC3F4BC609E62B27BD037E
 ```
 
 ### Instantiate oracle
@@ -518,11 +529,36 @@ Treasury half: [ustr-cmm#6](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/
 
 **Schema pin (INV-SCHEMA-001 / [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21)):** Window `InstantWithdrawCw20` JSON must match ustr-cmm treasury at git rev **`e6c4b7cf33f2f56d21c0e9fb2828efe87f032ded`** (`ust1_window::treasury::USTR_CMM_TREASURY_SCHEMA_REV`). Golden vectors: [`contracts/ust1-window/testdata/instant_withdraw_cw20_golden.json`](../contracts/ust1-window/testdata/instant_withdraw_cw20_golden.json). Verify / refresh: `scripts/verify_treasury_wire_schema.sh` (CI also runs `treasury_schema` + `real_treasury_integration` against the pinned `cmm-treasury` git dep).
 
-**Ops sequence (after window wasm with InstantWithdrawCw20 is stored):**
+**Ops sequence (mainnet status 2026-08-08):**
 
-1. Confirm treasury bytecode exposes `InstantWithdrawCw20` / `SetCw20Spender` (migrate treasury in place if still on pre-#6 code). Prefer bytecode built from the **schema pin** rev above (or a later rev that does not change the InstantWithdrawCw20 wire shape).
-2. Prefer **migrate** existing window `terra1zxwp…` (admin = governance) to the new code id so the address stays stable. `MigrateMsg` is empty; config (treasury, oracle, tokens, limits) is preserved.
-3. Treasury gov registers the window **with a 24h limit** (pulls fail without a limit):
+1. ~~Confirm treasury bytecode exposes `InstantWithdrawCw20` / `SetCw20Spender`~~ — treasury code **11564**.
+2. ~~Migrate window `terra1zxwp…`~~ — code **11566** (empty `MigrateMsg`; config preserved). Store + migrate signed by **`cl8y2_admin`** (`GOVERNANCE_KEY`):
+
+```bash
+# UST1_WINDOW_CODE_ID / WINDOW_ADDR from suggested exports (11566 / terra1zxwp…)
+
+# Store (if uploading a newer build):
+# terrad tx wasm store artifacts/ust1_window.wasm --from "$GOVERNANCE_KEY" \
+#   --chain-id columbus-5 --node "$TERRA_RPC" \
+#   --gas auto --gas-adjustment 1.5 --gas-prices 28.325uluna \
+#   --keyring-backend file --broadcast-mode sync -y
+
+terrad tx wasm migrate "$WINDOW_ADDR" "$UST1_WINDOW_CODE_ID" '{}' \
+  --from "$GOVERNANCE_KEY" \
+  --chain-id columbus-5 --node "$TERRA_RPC" \
+  --gas auto --gas-adjustment 1.5 --gas-prices 28.325uluna \
+  --keyring-backend file --broadcast-mode sync -y
+# done: tx 5C2A5CAF60C2CC90FD1ED897E938A2350DE129CB110BA601EF6E3B382FC11227
+```
+
+Verify via LCD if `terrad query wasm contract` hits a proto decode error:
+
+```bash
+curl -sS "$TERRA_LCD/cosmwasm/wasm/v1/contract/$WINDOW_ADDR" | jq '.contract_info.code_id'
+# expect "11566"
+```
+
+3. ~~Treasury gov registers the window **with a 24h limit**~~ — `limit_24h=10000000000` live. Re-run pattern if rotating spenders:
 
 ```bash
 # Example: align with window rolling inventory policy (~10_000 vFDUSD = 10000000000 base units)
@@ -534,13 +570,21 @@ terrad tx wasm execute "$CMM_TREASURY" \
   --keyring-backend file --broadcast-mode sync -y
 ```
 
-4. Query spenders / limit, then run a **small** UST1→vFDUSD withdraw smoke (**live probe — required before public redeem announcement**). Finder should show treasury CW20 **`Transfer`** (not `TransferFrom`). `allowance(treasury, window)` remains unused (0). Record the probe tx hash in the [address registry](#address-registry-template) notes.
+Query limit:
+
+```bash
+terrad query wasm contract-state smart "$CMM_TREASURY" \
+  '{"cw20_spender_limit":{"token":"'"$TERRA_VFDUSD"'","spender":"'"$WINDOW_ADDR"'"}}' \
+  --chain-id columbus-5 --node "$TERRA_RPC"
+```
+
+4. Run a **small** UST1→vFDUSD withdraw smoke (**live probe — required before public redeem announcement**). Finder should show treasury CW20 **`Transfer`** (not `TransferFrom`). `allowance(treasury, window)` remains unused (0). Record the probe tx hash in the [address registry](#address-registry-template) notes. Blocked until treasury holds vFDUSD and oracle `last_update_sec` is non-zero.
 
 **Live withdraw probe checklist (pre-announce):**
 
-- [ ] Schema pin rev recorded and CI `verify_treasury_wire_schema` / `treasury_schema` green on the deploy branch
-- [ ] Window migrated to InstantWithdrawCw20 code; treasury exposes spender API
-- [ ] `SetCw20Spender` + `limit_24h` executed for vFDUSD → window
+- [x] Schema pin rev recorded and CI `verify_treasury_wire_schema` / `treasury_schema` green on the deploy branch
+- [x] Window migrated to InstantWithdrawCw20 code **11566**; treasury exposes spender API (code **11564**)
+- [x] `SetCw20Spender` + `limit_24h` executed for vFDUSD → window
 - [ ] Small smoke withdraw succeeds; events show CW20 `Transfer` from treasury
 - [ ] Unhappy path sanity (optional): confirm unregistered spender cannot pull (gov test on staging / LocalTerra)
 
@@ -552,11 +596,34 @@ Until `last_update_sec` is set by a successful `UpdateRate`, window swaps may re
 
 ---
 
-## Render dashboard setup (no `render.yaml`)
+## Oracle host: Coolify (Dockerfile) or Render
 
 `ust1-oracle-service` is a **long-running process** with structured logs. It exposes a minimal **liveness** HTTP endpoint (`GET /healthz`) for platform health checks; there is no metrics API.
 
-### Create the service (UI)
+**Mainnet operator** (must match `TERRA_MNEMONIC`): `terra1hm3ph0jevtkuc9efj9q3ld3ktk3g6la3ruhqna`  
+**Oracle contract:** `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` (code **11549**).
+
+### Coolify (recommended)
+
+Repo root [`Dockerfile`](../Dockerfile) builds `ust1-oracle-service` (Rust **1.88** bookworm → slim runtime). [`.dockerignore`](../.dockerignore) trims build context.
+
+1. **New Resource → Application** (Dockerfile).
+2. Connect this GitLab repo; branch `main` (or a deploy tag).
+3. **Dockerfile** path: `/Dockerfile`; build context: repository root.
+4. **Port:** `8080` (health only — not a public API).
+5. **Healthcheck:** `GET /healthz` on port `8080` (or rely on the image `HEALTHCHECK`).
+6. **Environment:** paste the [table below](#oracle-service-environment). Mark `TERRA_MNEMONIC` as secret.
+7. **Deploy.** Confirm logs show startup + `check_rate_update`; after the first confirmed `UpdateRate`, oracle `state.last_update_sec` is non-zero.
+
+Local image smoke:
+
+```bash
+docker build -t ust1-oracle-service .
+docker run --rm -p 8080:8080 --env-file .env ust1-oracle-service
+curl -fsS http://127.0.0.1:8080/healthz
+```
+
+### Render dashboard (no `render.yaml`)
 
 1. **New → Background Worker** (recommended) or **Private Service** if your org uses them.
 2. Connect this repository (GitLab/GitHub).
@@ -566,18 +633,18 @@ Until `last_update_sec` is set by a successful `UpdateRate`, window swaps may re
 5. **Start command:**  
    `./target/release/ust1-oracle-service`
 6. **Instance type:** smallest that keeps steady CPU for periodic RPC polling; scale if you see RPC timeouts.
-7. **Environment → Environment Variables:** paste the [table below](#oracle-service-environment) (production values, never commit secrets). Set `RUST_VERSION` to match your local test toolchain if Render’s default is too old (e.g. `1.85.0`).
+7. **Environment → Environment Variables:** paste the [table below](#oracle-service-environment) (production values, never commit secrets). Set `RUST_VERSION` to match CI if needed (`1.88`).
 8. **Deploy.** Watch **Logs** for `check_rate_update` / `sign_and_broadcast_execute` outcomes.
 
 ### Secrets
 
-- Store `TERRA_MNEMONIC` in Render **Secret** fields only.
+- Store `TERRA_MNEMONIC` in Coolify/Render **Secret** fields only (seed for `terra1hm3ph…`).
 - Rotate operator keys via on-chain `SetOracleOperator` if compromised.
 
 ### Health / alerting
 
-- Enable Render **notifications** for **crashes and deploy failures**.
-- **HTTP health check:** point Render at `GET /healthz` on the bind address from `HEALTHZ_BIND` (default `0.0.0.0:8080`). This is **liveness only** (process up) — it does **not** prove a fresh on-chain oracle rate.
+- Enable host **notifications** for **crashes and deploy failures**.
+- **HTTP health check:** `GET /healthz` on `HEALTHZ_BIND` (default `0.0.0.0:8080`). This is **liveness only** (process up) — it does **not** prove a fresh on-chain oracle rate.
 - The binary emits **`error!`** if no **confirmed on-chain oracle update** exceeds `ORACLE_MAX_SILENCE_SECS` (default **21600** s) — forward logs to your SIEM or log drain and page on that pattern (`LIVENESS_ORACLE_NO_BROADCAST`). Also watch startup **`ORACLE_OPS_TIMING_MISCONFIG`** warnings.
 - **Silence tracking means confirmed updates** (**INV-ORACLE-LIVENESS-001**, [GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)): after `BROADCAST_MODE_SYNC` CheckTx, the service waits for DeliverTx `code == 0` and verifies oracle `State` (`last_update_sec` advanced, `rate` matches the proposed update) before recording liveness. Mempool admission alone does **not** reset the silence timer. See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md).
 - Combine `/healthz` with log-based silence alerts; neither alone guarantees rate freshness.
@@ -644,8 +711,8 @@ Treat mainnet addresses as **recorded-at-deploy**: store code id, tx hashes, and
 | vFDUSD cw20 | live | 10184 | `terra1mnl9azefrqpmu888ar2u6zrcwr80hxlt3avf4300r576cw5ar7esvxsvj3` | Minter = bridge; decimals 6; tx `48D01D2D…1F02` |
 | UST1 cw20 | live | 10184 | `terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72` | Minter = governance `terra1xsecn…`; decimals 6; tx `2A5970A8…3EAF` |
 | `ust1-oracle` | live | **11549** | `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` | Operator `terra1hm3ph0jevtkuc9efj9q3ld3ktk3g6la3ruhqna`; tx `EFA79773…355E` |
-| `ust1-window` | live | **11550** | `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` | fee_bps=100; per-tx 1000 / 24h 10000 UST1; tx `9F078327…224C` |
-| CMM treasury (ustr-cmm) | live | see ustr-cmm (migrate for #6/#7) | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | Contract; CW20 pulls via `InstantWithdrawCw20` + `SetCw20Spender`; gov `terra1xsecn…` |
+| `ust1-window` | live | **11566** | `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` | InstantWithdrawCw20; fee_bps=100; per-tx 1000 / 24h 10000 UST1; instantiate tx `9F078327…224C` (code 11550); store `AA40BE6A…037E`; migrate `5C2A5CAF…1227`; wasm sha256 `469e0b9f…ebc9` |
+| CMM treasury (ustr-cmm) | live | **11564** | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | Contract; window spender + `limit_24h=10000000000`; gov `terra1xsecn…` |
 | Terra deployer (`cl8ydeploy`) | — | — | `terra1hu4zggf3f8yw6jw3rxrjxn2drwad675gq5k2lv` | Code **10184** creator |
 | Terra admin / gov / bridge admin (`cl8y2_admin`) | — | — | `terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l` | CW20 admin + UST1 minter + bridge admin |
 | BSC vFDUSD (Venus) | — | — | `0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba` | LockUnlock; 8 decimals; registered on TokenRegistry |
@@ -682,6 +749,8 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-08-08 | Root [`Dockerfile`](../Dockerfile) + [`.dockerignore`](../.dockerignore) for `ust1-oracle-service` Coolify/Docker deploy; Coolify runbook in this doc ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
+| 2026-08-08 | Mainnet window migrate to InstantWithdrawCw20 code **11566** (store `AA40BE6A…037E`, migrate `5C2A5CAF…1227`); registry/README; ops note for `--gas-prices 28.325uluna` + password-locked `cl8y2_admin` ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19) Phase 5 / [#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20)). |
 | 2026-08-08 | Post-merge coverage gaps ([#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28)): M-8 minter integration, BSC hang, SIGTERM hook, equal-rate/policy-skip liveness, pause integration, TEST-16 LocalTerra gated smoke + docs. |
 | 2026-08-08 | Oracle circuit breaker: `State.paused` + window fail-closed (`OraclePaused`); emergency pause runbook ([issue #22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22); audit C-2 #1). |
 | 2026-08-08 | Audit hardening bundle ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)): `/healthz` liveness, tick/gas/RPC timeouts, INV-SWAP-003/004 dust guards, INV-DECIMALS-001, adaptive Terra gas price; skill [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md). |

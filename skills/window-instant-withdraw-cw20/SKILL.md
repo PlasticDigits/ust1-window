@@ -87,10 +87,10 @@ Key cases: golden / cross-crate schema match; stub rejects unknown fields; depos
 
 ## Mainnet ops checklist
 
-1. Store + migrate treasury (ustr-cmm) if CW20 InstantWithdraw not live (prefer schema pin rev).
-2. Optimize/store new `ust1_window` wasm; **migrate** `terra1zxwp…` (prefer keep address).
-3. `SetCw20Spender { token: vFDUSD, spender: WINDOW, limit_24h: … }`.
-4. Small withdraw smoke (**live probe before announce**); confirm treasury `Transfer` (not `TransferFrom`); allowance unused.
+1. ~~Store + migrate treasury (ustr-cmm)~~ — treasury code **11564**.
+2. ~~Optimize/store + migrate window~~ — `terra1zxwp…` → code **11566** (store `AA40BE6A…037E`, migrate `5C2A5CAF…1227`).
+3. ~~`SetCw20Spender { token: vFDUSD, spender: WINDOW, limit_24h: … }`~~ — `limit_24h=10000000000` live.
+4. Small withdraw smoke (**live probe before announce**); confirm treasury `Transfer` (not `TransferFrom`); allowance unused. Needs inventory + first `UpdateRate`.
 5. Mark #19 Phase 5 withdraw AC when smoke + oracle wiring complete.
 
 ## Out of scope
