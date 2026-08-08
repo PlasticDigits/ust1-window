@@ -61,4 +61,18 @@ else
   echo "verify_oracle_operator_env: advisory: POLL_INTERVAL_SECS / ORACLE_MAX_SILENCE_SECS should be positive integers when set" >&2
 fi
 
+# Optional hardening knobs (issue #25) — not required; printed when set for operator visibility.
+optional_vars=(
+  BSC_RPC_TIMEOUT_SECS
+  TICK_TIMEOUT_SECS
+  TERRA_GAS_PRICE
+  TERRA_GAS_PRICE_ULUNA
+  HEALTHZ_BIND
+)
+for v in "${optional_vars[@]}"; do
+  if [[ -n "${!v:-}" ]]; then
+    echo "verify_oracle_operator_env: optional $v=${!v}"
+  fi
+done
+
 echo "verify_oracle_operator_env: required oracle operator variables are set (count BSC_RPC_URLS ok)."

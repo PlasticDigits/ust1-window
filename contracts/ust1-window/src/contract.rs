@@ -44,6 +44,33 @@ fn query_cw20_balance(
     Ok(bal.balance)
 }
 
+fn query_cw20_token_info(
+    deps: Deps,
+    token: &cosmwasm_std::Addr,
+) -> StdResult<cw20::TokenInfoResponse> {
+    deps.querier.query(&QueryRequest::Wasm(WasmQuery::Smart {
+        contract_addr: token.to_string(),
+        msg: to_json_binary(&cw20::Cw20QueryMsg::TokenInfo {})?,
+    }))
+}
+
+/// INV-DECIMALS-001: vFDUSD decimals must be >= UST1 decimals (ust1-common atom scaling / D>=U).
+fn validate_token_decimals(
+    deps: Deps,
+    vfdusd_token: &cosmwasm_std::Addr,
+    ust1_token: &cosmwasm_std::Addr,
+) -> Result<(), ContractError> {
+    let vfdusd_info = query_cw20_token_info(deps, vfdusd_token)?;
+    let ust1_info = query_cw20_token_info(deps, ust1_token)?;
+    if vfdusd_info.decimals < ust1_info.decimals {
+        return Err(ContractError::InvalidTokenDecimals {
+            vfdusd: vfdusd_info.decimals,
+            ust1: ust1_info.decimals,
+        });
+    }
+    Ok(())
+}
+
 fn validate_max_oracle_age_sec(max_age_sec: u64) -> Result<(), ContractError> {
     if max_age_sec < ust1_common::MIN_ORACLE_UPDATE_INTERVAL_SECS {
         return Err(ContractError::MaxOracleAgeTooShort {
@@ -130,6 +157,7 @@ pub fn instantiate(
         paused: false,
         max_oracle_age_sec,
     };
+    validate_token_decimals(deps.as_ref(), &cfg.vfdusd_token, &cfg.ust1_token)?;
     CONFIG.save(deps.storage, &cfg)?;
     ROLLING.save(
         deps.storage,
@@ -201,6 +229,10 @@ fn deposit(
     ensure_oracle_usable(&env, &oracle_state, cfg.max_oracle_age_sec)?;
     let rate = oracle_state.rate;
     let ust1_out = ust1_common::math::deposit_vfdusd_to_ust1(amount_vfdusd, rate, cfg.fee_bps)?;
+    // INV-SWAP-003: deposit must revert when ust1_out == 0 (no treasury forward / Mint(0)).
+    if ust1_out.is_zero() {
+        return Err(ContractError::ZeroOutput {});
+    }
 
     let mut rolling = ROLLING.load(deps.storage)?;
     ensure_limits(&env, &mut rolling, &cfg, ust1_out)?;
@@ -255,6 +287,10 @@ fn withdraw(
     ensure_oracle_usable(&env, &oracle_state, cfg.max_oracle_age_sec)?;
     let rate = oracle_state.rate;
     let v_out = ust1_common::math::withdraw_gross_ust1_to_vfdusd(gross_ust1, rate, cfg.fee_bps)?;
+    // INV-SWAP-004: withdraw must revert when v_out == 0 (no Burn for nothing).
+    if v_out.is_zero() {
+        return Err(ContractError::ZeroOutput {});
+    }
     if v_out < min_out {
         return Err(ContractError::BelowMinimum {});
     }
@@ -439,5 +475,7 @@ fn query_effective_swap(deps: Deps) -> StdResult<EffectiveSwapResponse> {
 
 pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
     cw2::set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+    let cfg = CONFIG.load(deps.storage)?;
+    validate_token_decimals(deps.as_ref(), &cfg.vfdusd_token, &cfg.ust1_token)?;
     Ok(Response::default())
 }

@@ -8,6 +8,7 @@ mod bsc;
 mod config;
 mod confirm;
 mod evm_rpc;
+mod healthz;
 mod liveness;
 mod terra_tx;
 
@@ -16,6 +17,7 @@ use std::time::Duration;
 
 use cosmwasm_std::Uint128;
 use eyre::Result;
+use tokio::signal;
 use tracing::{error, info, warn};
 use ust1_common::oracle_policy::check_rate_update;
 use ust1_oracle::msg::{ExecuteMsg, QueryMsg, StateResponse};
@@ -37,13 +39,23 @@ async fn main() -> Result<()> {
     ) {
         warn!(target: "ust1_oracle_service", alert = "ORACLE_OPS_TIMING_MISCONFIG", "{msg}");
     }
-    bsc::verify_all_bsc_rpc_urls(&cfg.bsc_rpc_urls, &cfg.allowed_bsc_chain_ids).await?;
+    bsc::verify_all_bsc_rpc_urls(
+        &cfg.bsc_rpc_urls,
+        &cfg.allowed_bsc_chain_ids,
+        cfg.bsc_rpc_timeout_secs,
+    )
+    .await?;
     let signer = terra_tx::TerraSigner::new(terra_tx::TerraSignerConfig {
         lcd_url: cfg.terra_lcd_url.clone(),
         chain_id: cfg.terra_chain_id.clone(),
         mnemonic: cfg.terra_mnemonic.clone(),
         gas_limit: None,
+        gas_price: cfg.terra_gas_price,
     })?;
+
+    if !cfg.healthz_bind.is_empty() {
+        healthz::spawn_healthz_server(&cfg.healthz_bind).await?;
+    }
 
     let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
     let max_silence = Duration::from_secs(cfg.max_silence_since_broadcast_secs);
@@ -51,34 +63,76 @@ async fn main() -> Result<()> {
     info!(
         address = %signer.address_str(),
         poll_interval_secs = cfg.poll_interval_secs,
+        tick_timeout_secs = cfg.tick_timeout_secs,
         max_silence_since_broadcast_secs = cfg.max_silence_since_broadcast_secs,
         window_default_max_oracle_age_secs = ust1_common::DEFAULT_MAX_ORACLE_AGE_SECS,
         tx_confirm_timeout_secs = cfg.tx_confirm_timeout_secs,
         tx_confirm_poll_interval_ms = cfg.tx_confirm_poll_interval_ms,
+        healthz_bind = %cfg.healthz_bind,
         "oracle operator (poll ≪ max_oracle_age; silence ≤ max_oracle_age — H-3/#24; \
          liveness = confirmed DeliverTx + State — C-3/#23)"
     );
 
     loop {
-        {
-            let tracker = liveness.lock().expect("liveness mutex poisoned");
-            if tracker.should_alert(max_silence) {
-                let silence_secs = tracker.silence_since_last_broadcast().as_secs();
-                error!(
-                    target: "ust1_oracle_service",
-                    alert = "LIVENESS_ORACLE_NO_BROADCAST",
-                    silence_secs,
-                    threshold_secs = cfg.max_silence_since_broadcast_secs,
-                    "LIVENESS ALERT: no confirmed on-chain Terra oracle update within the configured silence window \
-                     (default aligns with window max oracle age — swaps may already be rejected); \
-                     investigate LCD, BSC RPC, keys, policy, and DeliverTx confirmation"
-                );
+        tokio::select! {
+            _ = shutdown_signal() => {
+                info!("shutdown signal received; exiting gracefully");
+                break;
             }
+            _ = async {
+                {
+                    let tracker = liveness::lock_liveness_arc(&liveness);
+                    if tracker.should_alert(max_silence) {
+                        let silence_secs = tracker.silence_since_last_broadcast().as_secs();
+                        error!(
+                            target: "ust1_oracle_service",
+                            alert = "LIVENESS_ORACLE_NO_BROADCAST",
+                            silence_secs,
+                            threshold_secs = cfg.max_silence_since_broadcast_secs,
+                            "LIVENESS ALERT: no confirmed on-chain Terra oracle update within the configured silence window \
+                             (default aligns with window max oracle age — swaps may already be rejected); \
+                             investigate LCD, BSC RPC, keys, policy, and DeliverTx confirmation"
+                        );
+                    }
+                }
+
+                match tokio::time::timeout(
+                    Duration::from_secs(cfg.tick_timeout_secs),
+                    run_once(&cfg, &signer, &liveness),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => warn!(error = %e, "tick failed"),
+                    Err(_) => warn!(
+                        tick_timeout_secs = cfg.tick_timeout_secs,
+                        "tick timed out"
+                    ),
+                }
+
+                tokio::time::sleep(Duration::from_secs(cfg.poll_interval_secs)).await;
+            } => {}
         }
-        if let Err(e) = run_once(&cfg, &signer, &liveness).await {
-            warn!(error = %e, "tick failed");
+    }
+
+    Ok(())
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm = signal(SignalKind::terminate()).expect("SIGTERM handler");
+        let mut sigint = signal(SignalKind::interrupt()).expect("SIGINT handler");
+        tokio::select! {
+            _ = signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+            _ = sigint.recv() => {}
         }
-        tokio::time::sleep(std::time::Duration::from_secs(cfg.poll_interval_secs)).await;
+    }
+    #[cfg(not(unix))]
+    {
+        signal::ctrl_c().await.expect("ctrl_c handler");
     }
 }
 
@@ -89,11 +143,14 @@ async fn run_once(
 ) -> Result<()> {
     let urls = &cfg.bsc_rpc_urls;
     let allowed = cfg.allowed_bsc_chain_ids.clone();
+    let timeout_secs = cfg.bsc_rpc_timeout_secs;
     let proposed: Uint128 = evm_rpc::run_with_evm_rpc_rate_consensus(urls, |url| {
         let v = cfg.venus_vtoken_address.clone();
         let confirm = cfg.bsc_confirmation_blocks;
         let allowed = allowed.clone();
-        async move { bsc::read_exchange_rate_stored(url, &v, confirm, &allowed).await }
+        async move {
+            bsc::read_exchange_rate_stored(url, &v, confirm, &allowed, timeout_secs).await
+        }
     })
     .await?;
 
@@ -136,10 +193,7 @@ async fn run_once(
                 "policy allows oracle update"
             );
             let txh = submit_and_confirm_oracle_update(cfg, signer, proposed, &state).await?;
-            liveness
-                .lock()
-                .expect("liveness mutex poisoned")
-                .record_successful_broadcast();
+            liveness::lock_liveness_arc(liveness).record_successful_broadcast();
             info!(
                 tx_hash = %txh,
                 new_rate = %proposed,
@@ -236,16 +290,20 @@ mod submit_confirm_tests {
                 "http://127.0.0.1:8546".into(),
             ],
             bsc_confirmation_blocks: 1,
+            bsc_rpc_timeout_secs: 30,
             allowed_bsc_chain_ids: vec![31337],
             venus_vtoken_address: "0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba".into(),
             terra_lcd_url: lcd.to_string(),
             terra_chain_id: "localterra".into(),
             terra_mnemonic: SecretString::new(TEST_MNEMONIC.to_string().into_boxed_str()),
+            terra_gas_price: terra_tx::DEFAULT_GAS_PRICE,
             oracle_contract: CONTRACT.into(),
             poll_interval_secs: 60,
+            tick_timeout_secs: 120,
             max_silence_since_broadcast_secs: 28_800,
             tx_confirm_timeout_secs: 2,
             tx_confirm_poll_interval_ms: 20,
+            healthz_bind: String::new(),
         }
     }
 
@@ -318,6 +376,7 @@ mod submit_confirm_tests {
             chain_id: "localterra".into(),
             mnemonic: cfg.terra_mnemonic.clone(),
             gas_limit: Some(200_000),
+            gas_price: cfg.terra_gas_price,
         })
         .unwrap();
         let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
@@ -327,8 +386,7 @@ mod submit_confirm_tests {
             .await
             .unwrap();
         assert_eq!(txh, hash);
-        // Caller pattern from run_once:
-        liveness.lock().unwrap().record_successful_broadcast();
+        liveness::lock_liveness_arc(&liveness).record_successful_broadcast();
         assert!(liveness.lock().unwrap().has_recorded_success());
     }
 
@@ -367,6 +425,7 @@ mod submit_confirm_tests {
             chain_id: "localterra".into(),
             mnemonic: cfg.terra_mnemonic.clone(),
             gas_limit: Some(200_000),
+            gas_price: cfg.terra_gas_price,
         })
         .unwrap();
         let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
@@ -406,7 +465,6 @@ mod submit_confirm_tests {
             })))
             .mount(&server)
             .await;
-        // Inclusion ok but state unchanged / wrong rate (another operator race).
         Mock::given(method("GET"))
             .and(path_regex(r"^/cosmwasm/wasm/v1/contract/.*/smart/.*"))
             .respond_with(ResponseTemplate::new(200).set_body_json(state_lcd_body(1_500, 200)))
@@ -419,6 +477,7 @@ mod submit_confirm_tests {
             chain_id: "localterra".into(),
             mnemonic: cfg.terra_mnemonic.clone(),
             gas_limit: Some(200_000),
+            gas_price: cfg.terra_gas_price,
         })
         .unwrap();
         let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
@@ -460,9 +519,7 @@ mod submit_confirm_tests {
             .await;
 
         let mut cfg = test_cfg(&server.uri());
-        cfg.tx_confirm_timeout_secs = 0;
         cfg.tx_confirm_poll_interval_ms = 10;
-        // timeout 0 still allows one poll then fail; use 1s with short poll for reliability
         cfg.tx_confirm_timeout_secs = 1;
 
         let signer = terra_tx::TerraSigner::new(terra_tx::TerraSignerConfig {
@@ -470,6 +527,7 @@ mod submit_confirm_tests {
             chain_id: "localterra".into(),
             mnemonic: cfg.terra_mnemonic.clone(),
             gas_limit: Some(200_000),
+            gas_price: cfg.terra_gas_price,
         })
         .unwrap();
         let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
@@ -479,5 +537,76 @@ mod submit_confirm_tests {
             .unwrap_err();
         assert!(err.to_string().contains("confirmation timeout"), "{err}");
         assert!(!liveness.lock().unwrap().has_recorded_success());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::time::sleep;
+
+    #[tokio::test]
+    async fn tick_timeout_returns_timed_out() {
+        let outcome = tokio::time::timeout(Duration::from_millis(100), async {
+            tokio::time::timeout(Duration::from_millis(50), sleep(Duration::from_secs(10)))
+                .await
+                .map_err(|_| ())
+        })
+        .await;
+        assert!(outcome.is_ok());
+        assert!(outcome.unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn run_tick_with_timeout_times_out_on_slow_tick() {
+        let cfg = config::Config {
+            bsc_rpc_urls: vec!["http://a".into(), "http://b".into()],
+            bsc_confirmation_blocks: 15,
+            bsc_rpc_timeout_secs: 30,
+            allowed_bsc_chain_ids: vec![56],
+            venus_vtoken_address: String::new(),
+            terra_lcd_url: String::new(),
+            terra_chain_id: String::new(),
+            terra_mnemonic: secrecy::SecretString::new("seed".to_string().into_boxed_str()),
+            terra_gas_price: 0.015,
+            oracle_contract: String::new(),
+            poll_interval_secs: 1,
+            tick_timeout_secs: 1,
+            max_silence_since_broadcast_secs: 21_600,
+            tx_confirm_timeout_secs: 90,
+            tx_confirm_poll_interval_ms: 2_000,
+            healthz_bind: String::new(),
+        };
+        let signer = terra_tx::TerraSigner::new(terra_tx::TerraSignerConfig {
+            lcd_url: "http://127.0.0.1:1".into(),
+            chain_id: "columbus-5".into(),
+            mnemonic: secrecy::SecretString::new(
+                "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+                    .to_string()
+                    .into_boxed_str(),
+            ),
+            gas_limit: None,
+            gas_price: 0.015,
+        })
+        .unwrap();
+        let liveness = Arc::new(Mutex::new(liveness::LivenessTracker::new()));
+
+        async fn hang_forever(
+            _cfg: &config::Config,
+            _signer: &terra_tx::TerraSigner,
+            _liveness: &Arc<Mutex<liveness::LivenessTracker>>,
+        ) -> Result<()> {
+            sleep(Duration::from_secs(60)).await;
+            Ok(())
+        }
+
+        let timed_out = tokio::time::timeout(
+            Duration::from_secs(cfg.tick_timeout_secs),
+            hang_forever(&cfg, &signer, &liveness),
+        )
+        .await
+        .is_err();
+        assert!(timed_out);
     }
 }

@@ -5,3 +5,18 @@ title = "ust1-window"
 
 [extend]
 useDefault = true
+
+# Public mainnet addresses in operator docs (not secrets).
+[[allowlists]]
+description = "docs and audits: public on-chain addresses"
+paths = [
+  '''^docs/''',
+  '''^audits/''',
+]
+
+# Cargo build output (may contain embedded paths matching generic rules).
+[[allowlists]]
+description = "Rust target build artifacts"
+paths = [
+  '''(^|/)target/''',
+]
