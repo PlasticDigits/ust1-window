@@ -37,4 +37,28 @@ if [[ "${rpc_count:-0}" -lt 2 ]]; then
   exit 1
 fi
 
+# Advisories for H-3 / #24 (INV-ORACLE-OPS-POLL-001 / INV-ORACLE-OPS-SILENCE-001).
+# Defaults match oracle-service/src/config.rs; window default age is 21600.
+# Matches ust1_common::DEFAULT_MAX_ORACLE_AGE_SECS — keep in sync if that constant changes.
+WINDOW_MAX_ORACLE_AGE_SECS_DEFAULT=21600
+poll="${POLL_INTERVAL_SECS:-3600}"
+silence="${ORACLE_MAX_SILENCE_SECS:-21600}"
+
+if [[ "$poll" =~ ^[0-9]+$ ]] && [[ "$silence" =~ ^[0-9]+$ ]]; then
+  if [[ "$poll" -eq 0 ]]; then
+    echo "verify_oracle_operator_env: advisory: POLL_INTERVAL_SECS=0 tight-loops LCD/RPC (prefer 3600)" >&2
+  elif [[ "$poll" -ge "$WINDOW_MAX_ORACLE_AGE_SECS_DEFAULT" ]]; then
+    echo "verify_oracle_operator_env: advisory: POLL_INTERVAL_SECS ($poll) >= window max oracle age default ($WINDOW_MAX_ORACLE_AGE_SECS_DEFAULT); one missed tick can halt swaps (INV-ORACLE-OPS-POLL-001)" >&2
+  fi
+  if [[ "$silence" -gt "$WINDOW_MAX_ORACLE_AGE_SECS_DEFAULT" ]]; then
+    echo "verify_oracle_operator_env: advisory: ORACLE_MAX_SILENCE_SECS ($silence) > window max oracle age default ($WINDOW_MAX_ORACLE_AGE_SECS_DEFAULT); alert may fire after user impact (INV-ORACLE-OPS-SILENCE-001)" >&2
+  fi
+  grace=$((WINDOW_MAX_ORACLE_AGE_SECS_DEFAULT + poll))
+  if [[ "$silence" -gt "$grace" ]]; then
+    echo "verify_oracle_operator_env: advisory: ORACLE_MAX_SILENCE_SECS ($silence) > max_age+poll ($grace); late paging footgun" >&2
+  fi
+else
+  echo "verify_oracle_operator_env: advisory: POLL_INTERVAL_SECS / ORACLE_MAX_SILENCE_SECS should be positive integers when set" >&2
+fi
+
 echo "verify_oracle_operator_env: required oracle operator variables are set (count BSC_RPC_URLS ok)."

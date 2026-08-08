@@ -40,6 +40,11 @@ pub const MIN_ORACLE_UPDATE_INTERVAL_SECS: u64 = 4 * 60 * 60;
 ///
 /// Must be at least [`MIN_ORACLE_UPDATE_INTERVAL_SECS`] so swaps are not impossible between
 /// on-chain oracle updates.
+///
+/// Off-chain oracle service defaults (poll / silence) are aligned to this budget — see
+/// `ust1-oracle-service` **INV-ORACLE-OPS-POLL-001** / **INV-ORACLE-OPS-SILENCE-001**,
+/// `docs/DEPLOYMENT.md`, `skills/oracle-ops-poll-silence/SKILL.md`, and
+/// glab [#24](https://gitlab.com/PlasticDigits/ust1-window/-/issues/24).
 pub const DEFAULT_MAX_ORACLE_AGE_SECS: u64 = 6 * 60 * 60;
 
 /// Basis points denominator.

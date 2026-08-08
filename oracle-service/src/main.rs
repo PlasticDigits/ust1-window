@@ -26,6 +26,12 @@ async fn main() -> Result<()> {
 
     let cfg = config::Config::from_env()?;
     info!(allowed_chain_ids = ?cfg.allowed_bsc_chain_ids, "BSC EVM chain allowlist");
+    for msg in config::ops_timing_warnings(
+        cfg.poll_interval_secs,
+        cfg.max_silence_since_broadcast_secs,
+    ) {
+        warn!(target: "ust1_oracle_service", alert = "ORACLE_OPS_TIMING_MISCONFIG", "{msg}");
+    }
     bsc::verify_all_bsc_rpc_urls(&cfg.bsc_rpc_urls, &cfg.allowed_bsc_chain_ids).await?;
     let signer = terra_tx::TerraSigner::new(terra_tx::TerraSignerConfig {
         lcd_url: cfg.terra_lcd_url.clone(),
@@ -41,7 +47,9 @@ async fn main() -> Result<()> {
         address = %signer.address_str(),
         poll_interval_secs = cfg.poll_interval_secs,
         max_silence_since_broadcast_secs = cfg.max_silence_since_broadcast_secs,
-        "oracle operator"
+        window_default_max_oracle_age_secs = ust1_common::DEFAULT_MAX_ORACLE_AGE_SECS,
+        "oracle operator (poll ≪ max_oracle_age; silence ≤ max_oracle_age — H-3/#24; \
+         silence still CheckTx-keyed until C-3/#23)"
     );
 
     loop {
@@ -54,8 +62,10 @@ async fn main() -> Result<()> {
                     alert = "LIVENESS_ORACLE_NO_BROADCAST",
                     silence_secs,
                     threshold_secs = cfg.max_silence_since_broadcast_secs,
-                    "LIVENESS ALERT: no successful Terra oracle broadcast within the configured silence window; \
-                     on-chain rate may be stale — investigate LCD, BSC RPC, keys, and policy"
+                    "LIVENESS ALERT: no successful Terra oracle broadcast within the configured silence window \
+                     (default aligns with window max oracle age — swaps may already be rejected); \
+                     investigate LCD, BSC RPC, keys, and policy. Note: until C-3/#23, success is \
+                     SYNC/CheckTx accept, not DeliverTx confirmation"
                 );
             }
         }

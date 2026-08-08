@@ -88,3 +88,4 @@ Key cases: deposit→withdraw round trip with **zero** allowance; treasury rejec
 
 - Implementing treasury CW20 API (ustr-cmm).
 - Changing fee/limit params, oracle service, bridge, or `cmm-native-wrap`.
+  (Oracle poll/silence vs window staleness: [`skills/oracle-ops-poll-silence`](../oracle-ops-poll-silence/SKILL.md) / [#24](https://gitlab.com/PlasticDigits/ust1-window/-/issues/24).)

@@ -3,15 +3,42 @@
 //! Deployment checklist and env table: `docs/DEPLOYMENT.md` (repo root). Invariants mirrored
 //! off-chain: **INV-ORACLE-THROTTLE-001**, **INV-ORACLE-DAILY-001**, **INV-ORACLE-MONO-001** in
 //! `ust1-common::oracle_policy`.
+//!
+//! Ops timing (H-3 / [glab #24](https://gitlab.com/PlasticDigits/ust1-window/-/issues/24)):
+//! - **INV-ORACLE-OPS-POLL-001** — default `POLL_INTERVAL_SECS` ≪ window
+//!   [`ust1_common::DEFAULT_MAX_ORACLE_AGE_SECS`] so one missed tick cannot exhaust staleness.
+//! - **INV-ORACLE-OPS-SILENCE-001** — default `ORACLE_MAX_SILENCE_SECS` ≤ window max age so
+//!   liveness pages at or before swap halt.
+//!
+//! Related: C-3 / [glab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23) — after
+//! confirm-before-liveness, silence must key off **confirmed** on-chain updates (not CheckTx-only).
+//! Agent skill: `skills/oracle-ops-poll-silence/SKILL.md`.
 
 use alloy::primitives::Address;
 use eyre::{eyre, Result};
 use secrecy::SecretString;
 use std::str::FromStr;
 use url::Url;
+use ust1_common::DEFAULT_MAX_ORACLE_AGE_SECS;
 
 /// Canonical Venus vFDUSD vToken on BSC mainnet (EVM-03 / glab #9).
 const CANONICAL_VENUS_VFDUSD_BSC_MAINNET: &str = "0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba";
+
+/// Default off-chain poll interval (1 hour).
+///
+/// **INV-ORACLE-OPS-POLL-001:** must stay **strictly below**
+/// [`DEFAULT_MAX_ORACLE_AGE_SECS`] (6h). On-chain throttle
+/// ([`ust1_common::MIN_ORACLE_UPDATE_INTERVAL_SECS`], 4h) still makes most ticks no-ops when
+/// within band — lowering the poll default does not imply a tx every hour.
+pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 3_600;
+
+/// Default liveness silence threshold (equal to window max oracle age = 6h).
+///
+/// **INV-ORACLE-OPS-SILENCE-001:** must not exceed
+/// [`DEFAULT_MAX_ORACLE_AGE_SECS`] (+ small grace). Prefer ≤ max age so ops are paged at or
+/// before users are bricked. Until C-3 (#23), "successful broadcast" still means CheckTx/sync
+/// accept — not DeliverTx confirmation.
+pub const DEFAULT_ORACLE_MAX_SILENCE_SECS: u64 = DEFAULT_MAX_ORACLE_AGE_SECS;
 
 /// When the only allowed EVM chain is BSC mainnet (56), require the canonical Venus vFDUSD vToken.
 /// For BSC testnet (97), Anvil (31337), etc., any valid contract address is accepted so deployments can use mocks.
@@ -79,6 +106,59 @@ fn validate_https_url(url_str: &str, field: &str, allow_dev_http: bool) -> Resul
     }
 }
 
+/// Resolve `POLL_INTERVAL_SECS` from an optional env string (invalid/missing → default).
+pub(crate) fn resolve_poll_interval_secs(env_val: Option<&str>) -> u64 {
+    env_val
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_POLL_INTERVAL_SECS)
+}
+
+/// Resolve `ORACLE_MAX_SILENCE_SECS` from an optional env string (invalid/missing → default).
+pub(crate) fn resolve_max_silence_secs(env_val: Option<&str>) -> u64 {
+    env_val
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_ORACLE_MAX_SILENCE_SECS)
+}
+
+/// Operator advisories for poll/silence vs the **default** window max oracle age.
+///
+/// The service does not read on-chain `max_oracle_age_sec`; if governance raised that knob,
+/// operators must keep `POLL_INTERVAL_SECS` ≪ and `ORACLE_MAX_SILENCE_SECS` ≤ the live value
+/// (see `docs/DEPLOYMENT.md`). Warnings never fail config load.
+pub fn ops_timing_warnings(poll_interval_secs: u64, max_silence_secs: u64) -> Vec<String> {
+    let max_age = DEFAULT_MAX_ORACLE_AGE_SECS;
+    let mut warnings = Vec::new();
+
+    if poll_interval_secs == 0 {
+        warnings.push(
+            "POLL_INTERVAL_SECS=0 tight-loops LCD/RPC; use a positive interval (default 3600)"
+                .to_string(),
+        );
+    } else if poll_interval_secs >= max_age {
+        warnings.push(format!(
+            "POLL_INTERVAL_SECS ({poll_interval_secs}) >= DEFAULT_MAX_ORACLE_AGE_SECS ({max_age}): \
+             one missed tick can halt window swaps (INV-ORACLE-OPS-POLL-001)"
+        ));
+    }
+
+    if max_silence_secs > max_age {
+        warnings.push(format!(
+            "ORACLE_MAX_SILENCE_SECS ({max_silence_secs}) > DEFAULT_MAX_ORACLE_AGE_SECS ({max_age}): \
+             liveness alert fires after the window already rejects swaps (INV-ORACLE-OPS-SILENCE-001)"
+        ));
+    }
+
+    // Footgun: silence far looser than poll cadence (e.g. poll=6h, silence=24h).
+    if poll_interval_secs > 0 && max_silence_secs > poll_interval_secs.saturating_mul(8) {
+        warnings.push(format!(
+            "ORACLE_MAX_SILENCE_SECS ({max_silence_secs}) > 8× POLL_INTERVAL_SECS ({poll_interval_secs}): \
+             silence threshold is unusually loose relative to poll cadence"
+        ));
+    }
+
+    warnings
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub bsc_rpc_urls: Vec<String>,
@@ -94,7 +174,8 @@ pub struct Config {
     pub terra_mnemonic: SecretString,
     pub oracle_contract: String,
     pub poll_interval_secs: u64,
-    /// Emit a loud log if no successful Terra broadcast for this many seconds (default 8h).
+    /// Emit a loud log if no successful Terra broadcast for this many seconds
+    /// (default [`DEFAULT_ORACLE_MAX_SILENCE_SECS`] = 6h).
     pub max_silence_since_broadcast_secs: u64,
 }
 
@@ -138,14 +219,12 @@ impl Config {
             ),
             oracle_contract: std::env::var("ORACLE_CONTRACT")
                 .map_err(|_| eyre!("ORACLE_CONTRACT is required"))?,
-            poll_interval_secs: std::env::var("POLL_INTERVAL_SECS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(21_600),
-            max_silence_since_broadcast_secs: std::env::var("ORACLE_MAX_SILENCE_SECS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(28_800),
+            poll_interval_secs: resolve_poll_interval_secs(
+                std::env::var("POLL_INTERVAL_SECS").ok().as_deref(),
+            ),
+            max_silence_since_broadcast_secs: resolve_max_silence_secs(
+                std::env::var("ORACLE_MAX_SILENCE_SECS").ok().as_deref(),
+            ),
         })
     }
 }
@@ -182,6 +261,65 @@ mod tests {
     }
 
     #[test]
+    fn default_poll_and_silence_aligned_with_window_budget() {
+        // H-3 / #24 acceptance: poll ≤ 1h and ≪ max age; silence ≤ max age (not 8h).
+        assert!(DEFAULT_POLL_INTERVAL_SECS <= 3_600);
+        assert!(DEFAULT_POLL_INTERVAL_SECS < DEFAULT_MAX_ORACLE_AGE_SECS);
+        assert_eq!(DEFAULT_ORACLE_MAX_SILENCE_SECS, DEFAULT_MAX_ORACLE_AGE_SECS);
+        assert!(DEFAULT_ORACLE_MAX_SILENCE_SECS <= DEFAULT_MAX_ORACLE_AGE_SECS);
+        assert!(DEFAULT_ORACLE_MAX_SILENCE_SECS < 28_800);
+    }
+
+    #[test]
+    fn resolve_poll_defaults_and_overrides() {
+        assert_eq!(resolve_poll_interval_secs(None), DEFAULT_POLL_INTERVAL_SECS);
+        assert_eq!(resolve_poll_interval_secs(Some("")), DEFAULT_POLL_INTERVAL_SECS);
+        assert_eq!(resolve_poll_interval_secs(Some("not-a-number")), DEFAULT_POLL_INTERVAL_SECS);
+        assert_eq!(resolve_poll_interval_secs(Some("1800")), 1_800);
+    }
+
+    #[test]
+    fn resolve_silence_defaults_and_overrides() {
+        assert_eq!(
+            resolve_max_silence_secs(None),
+            DEFAULT_ORACLE_MAX_SILENCE_SECS
+        );
+        assert_eq!(resolve_max_silence_secs(Some("7200")), 7_200);
+        assert_eq!(
+            resolve_max_silence_secs(Some("bogus")),
+            DEFAULT_ORACLE_MAX_SILENCE_SECS
+        );
+    }
+
+    #[test]
+    fn ops_timing_warnings_clean_for_defaults() {
+        assert!(
+            ops_timing_warnings(DEFAULT_POLL_INTERVAL_SECS, DEFAULT_ORACLE_MAX_SILENCE_SECS)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ops_timing_warnings_flag_legacy_misconfig() {
+        // Historic footgun: poll == max age, silence 8h.
+        let w = ops_timing_warnings(21_600, 28_800);
+        assert!(
+            w.iter().any(|s| s.contains("INV-ORACLE-OPS-POLL-001")),
+            "{w:?}"
+        );
+        assert!(
+            w.iter().any(|s| s.contains("INV-ORACLE-OPS-SILENCE-001")),
+            "{w:?}"
+        );
+    }
+
+    #[test]
+    fn ops_timing_warnings_flag_zero_poll() {
+        let w = ops_timing_warnings(0, DEFAULT_ORACLE_MAX_SILENCE_SECS);
+        assert!(w.iter().any(|s| s.contains("tight-loops")), "{w:?}");
+    }
+
+    #[test]
     fn config_debug_redacts_mnemonic() {
         let cfg = Config {
             bsc_rpc_urls: vec!["http://example".into()],
@@ -196,8 +334,8 @@ mod tests {
                     .into_boxed_str(),
             ),
             oracle_contract: String::new(),
-            poll_interval_secs: 0,
-            max_silence_since_broadcast_secs: 28_800,
+            poll_interval_secs: DEFAULT_POLL_INTERVAL_SECS,
+            max_silence_since_broadcast_secs: DEFAULT_ORACLE_MAX_SILENCE_SECS,
         };
         let s = format!("{cfg:?}");
         assert!(
