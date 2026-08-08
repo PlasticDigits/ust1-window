@@ -1,22 +1,47 @@
 # Gitleaks configuration (https://github.com/gitleaks/gitleaks)
-# Add [[allowlists]] or path-specific rules here if a false positive appears.
+# Add allowlists here if a false positive appears (public registry addresses, etc.).
 
 title = "ust1-window"
 
 [extend]
 useDefault = true
 
-# Public mainnet addresses in operator docs (not secrets).
+# Legacy single allowlist (gitleaks < 8.21) — public docs + build artifacts + known pubkeys.
+[allowlist]
+description = "docs, audits, target/, and known public EVM addresses"
+paths = [
+  '''(?:^|/)docs/''',
+  '''(?:^|/)audits/''',
+  '''(?i)DEPLOYMENT\.md$''',
+  '''(?i)README\.md$''',
+  '''(?:^|/)target/''',
+]
+regexes = [
+  # Canonical Venus vFDUSD vToken on BSC (public; also in config.rs / tests).
+  '''(?i)0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba''',
+  # Public BSC token registry from DEPLOYMENT.md.
+  '''(?i)0x3d8820ec93748fd4df8eee6b763834a23938b207''',
+]
+
+# Modern multi-allowlists (pre-commit pin v8.24.2).
 [[allowlists]]
 description = "docs and audits: public on-chain addresses"
 paths = [
-  '''^docs/''',
-  '''^audits/''',
+  '''(?:^|/)docs/''',
+  '''(?:^|/)audits/''',
+  '''(?i)DEPLOYMENT\.md$''',
+  '''(?i)README\.md$''',
 ]
 
-# Cargo build output (may contain embedded paths matching generic rules).
 [[allowlists]]
 description = "Rust target build artifacts"
 paths = [
-  '''(^|/)target/''',
+  '''(?:^|/)target/''',
+]
+
+[[allowlists]]
+description = "known public EVM contract addresses (not secrets)"
+regexes = [
+  '''(?i)0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba''',
+  '''(?i)0x3d8820ec93748fd4df8eee6b763834a23938b207''',
 ]
