@@ -73,6 +73,14 @@ Ops timing vs window staleness ([glab #24](https://gitlab.com/PlasticDigits/ust1
 - The service does **not** read live on-chain `max_oracle_age_sec`; if governance changes it, retune env. Startup logs `ORACLE_OPS_TIMING_MISCONFIG` for common footguns (does not hard-fail).
 - Silence keys off **confirmed** on-chain updates (DeliverTx + matching `State`, C-3 / [#23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)), not mempool CheckTx acceptance alone.
 
+Window swap guards (audit hardening, [issue #25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25); see [`audits/INTERNAL_KIMIK3_1786162831.md`](../audits/INTERNAL_KIMIK3_1786162831.md)):
+
+- **INV-DECIMALS-001** — at `ust1-window` instantiate, vFDUSD token decimals must be **≥** UST1 token decimals (`validate_token_decimals`; atom scaling assumes D≥U).
+- **INV-SWAP-003** — deposit reverts when computed `ust1_out == 0` (no treasury forward / `Mint(0)`).
+- **INV-SWAP-004** — withdraw reverts when computed `v_out == 0` (no burn-for-nothing).
+
+Agent skill for these invariants and ops knobs: [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md).
+
 ---
 
 ## Terra Classic CLI (`terrad`): gas, fees, and common mistakes
@@ -499,7 +507,7 @@ Until `last_update_sec` is set by a successful `UpdateRate`, window swaps may re
 
 ## Render dashboard setup (no `render.yaml`)
 
-`ust1-oracle-service` is a **long-running process** with structured logs and **no HTTP API**. On Render, prefer a **Background Worker** (not a public Web Service) unless you add a separate health HTTP sidecar.
+`ust1-oracle-service` is a **long-running process** with structured logs. It exposes a minimal **liveness** HTTP endpoint (`GET /healthz`) for platform health checks; there is no metrics API.
 
 ### Create the service (UI)
 
@@ -522,10 +530,10 @@ Until `last_update_sec` is set by a successful `UpdateRate`, window swaps may re
 ### Health / alerting
 
 - Enable Render **notifications** for **crashes and deploy failures**.
-- Enable Render **notifications** for **crashes and deploy failures**.
+- **HTTP health check:** point Render at `GET /healthz` on the bind address from `HEALTHZ_BIND` (default `0.0.0.0:8080`). This is **liveness only** (process up) — it does **not** prove a fresh on-chain oracle rate.
 - The binary emits **`error!`** if no **confirmed on-chain oracle update** exceeds `ORACLE_MAX_SILENCE_SECS` (default **21600** s) — forward logs to your SIEM or log drain and page on that pattern (`LIVENESS_ORACLE_NO_BROADCAST`). Also watch startup **`ORACLE_OPS_TIMING_MISCONFIG`** warnings.
 - **Silence tracking means confirmed updates** (**INV-ORACLE-LIVENESS-001**, [GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)): after `BROADCAST_MODE_SYNC` CheckTx, the service waits for DeliverTx `code == 0` and verifies oracle `State` (`last_update_sec` advanced, `rate` matches the proposed update) before recording liveness. Mempool admission alone does **not** reset the silence timer. See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md).
-- Do **not** rely on Render’s HTTP health check for this binary unless you add an HTTP probe.
+- Combine `/healthz` with log-based silence alerts; neither alone guarantees rate freshness.
 
 ---
 
@@ -538,6 +546,7 @@ Loaded in [`Config::from_env`](../oracle-service/src/config.rs). Timing defaults
 | `BSC_RPC_URLS` | Comma-separated HTTPS RPC URLs (**≥ 2**). |
 | `BSC_ALLOWED_CHAIN_IDS` | Default `56`; widen only for non-mainnet testing. |
 | `BSC_CONFIRMATION_BLOCKS` | Reorg depth (default 15). |
+| `BSC_RPC_TIMEOUT_SECS` | Per-RPC HTTP timeout for BSC reads (default 30). |
 | `VENUS_VTOKEN_ADDRESS` | On BSC-mainnet-only allowlist, must be canonical vFDUSD vToken (see `config.rs`). |
 | `TERRA_LCD_URL` | HTTPS LCD base URL (used for queries + broadcast). |
 | `TERRA_CHAIN_ID` | `columbus-5` on mainnet. |
@@ -547,6 +556,9 @@ Loaded in [`Config::from_env`](../oracle-service/src/config.rs). Timing defaults
 | `ORACLE_MAX_SILENCE_SECS` | Loud log if no **confirmed** on-chain oracle update (DeliverTx + matching `State`; default **21600** s). Prefer ≤ window max oracle age; documented grace ≤ `max_age + poll`. |
 | `ORACLE_TX_CONFIRM_TIMEOUT_SECS` | Max wait for DeliverTx after SYNC broadcast (default 90). |
 | `ORACLE_TX_CONFIRM_POLL_INTERVAL_MS` | Inclusion poll interval (default 2000). |
+| `HEALTHZ_BIND` | Liveness HTTP bind (`host:port`, default `0.0.0.0:8080`). Set `off`/`disabled`/empty to disable. Probe is process-up only (`GET /healthz`). |
+| `TICK_TIMEOUT_SECS` | Wall-clock cap per poll tick (BSC + Terra paths); default 120. |
+| `TERRA_GAS_PRICE` | Configured gas floor in uluna/gas (default `0.015`; alias `TERRA_GAS_PRICE_ULUNA`). Service uses `max(configured, network_min)` when LCD `/cosmos/base/node/v1beta1/config` probe succeeds; otherwise the configured floor. |
 
 **Production relationship:**
 
@@ -624,6 +636,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 | Date | Change |
 |------|--------|
 | 2026-08-08 | Oracle circuit breaker: `State.paused` + window fail-closed (`OraclePaused`); emergency pause runbook ([issue #22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22); audit C-2 #1). |
+| 2026-08-08 | Audit hardening bundle ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)): `/healthz` liveness, tick/gas/RPC timeouts, INV-SWAP-003/004 dust guards, INV-DECIMALS-001, adaptive Terra gas price; skill [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md). |
 | 2026-08-08 | Window withdraw = treasury `InstantWithdrawCw20` (Option 3); Phase 5 ops = migrate window + `SetCw20Spender`/`limit_24h` ([issue #20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20); depends on ustr-cmm #6/#7). |
 | 2026-07-30 | Mainnet CW20s live: **vFDUSD** `terra1mnl9…svj3`, **UST1** `terra1f0eq…fy72` (code **10184**); registry + README updated ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-07-30 | Phase 2/3 operator runbook: code id **10184**, known deployer/gov/BSC addresses, Venus vFDUSD **LockUnlock** + Terra **mint_burn**, decimals Terra 6 / BSC 8 ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |

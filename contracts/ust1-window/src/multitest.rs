@@ -9,10 +9,13 @@ use cosmwasm_std::{
 use cw20::{Cw20ExecuteMsg, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
 
-use crate::msg::{ConfigResponse, Cw20HookMsg, ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
+use crate::msg::{
+    ConfigResponse, Cw20HookMsg, EffectiveSwapResponse, ExecuteMsg, InstantiateMsg, MigrateMsg,
+    QueryMsg,
+};
 use crate::treasury::TreasuryExecuteMsg;
 use ust1_common::{
-    DEFAULT_FEE_BPS, DEFAULT_MAX_ORACLE_AGE_SECS, DEFAULT_PER_TX_UST1_LIMIT,
+    BPS_DENOM, DEFAULT_FEE_BPS, DEFAULT_MAX_ORACLE_AGE_SECS, DEFAULT_PER_TX_UST1_LIMIT,
     DEFAULT_ROLLING_24H_UST1_LIMIT, MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE,
 };
 use ust1_oracle::msg as oracle_msg;
@@ -1202,4 +1205,444 @@ fn migrate_preserves_config() {
     assert_eq!(after.cmm_treasury, treasury.to_string());
     assert_eq!(after.vfdusd_token, vfdusd.to_string());
     assert_eq!(after.ust1_token, ust1.to_string());
+}
+
+#[test]
+fn dust_deposit_reverts_balances_unchanged() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        treasury,
+        vfdusd,
+        ust1,
+        window,
+        ..
+    } = setup();
+
+    app.execute_contract(
+        owner.clone(),
+        window.clone(),
+        &ExecuteMsg::SetFeeBps {
+            fee_bps: BPS_DENOM as u16,
+        },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(1_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let user_v_before = cw20_balance(&app, &vfdusd, &user);
+    let treasury_v_before = cw20_balance(&app, &vfdusd, &treasury);
+    let user_u_before = cw20_balance(&app, &ust1, &user);
+
+    let err = app
+        .execute_contract(
+            user.clone(),
+            vfdusd.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: Uint128::from(100_000u128),
+                msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("zero output"),
+        "unexpected: {err}"
+    );
+
+    assert_eq!(cw20_balance(&app, &vfdusd, &user), user_v_before);
+    assert_eq!(cw20_balance(&app, &vfdusd, &treasury), treasury_v_before);
+    assert_eq!(cw20_balance(&app, &ust1, &user), user_u_before);
+}
+
+#[test]
+fn dust_withdraw_reverts_no_burn() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        ust1,
+        window,
+        ..
+    } = setup();
+
+    app.execute_contract(
+        owner.clone(),
+        window.clone(),
+        &ExecuteMsg::SetFeeBps {
+            fee_bps: BPS_DENOM as u16,
+        },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        owner.clone(),
+        ust1.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(1_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let ust1_before = cw20_balance(&app, &ust1, &user);
+
+    let err = app
+        .execute_contract(
+            user.clone(),
+            ust1.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: Uint128::from(100_000u128),
+                msg: to_json_binary(&Cw20HookMsg::Withdraw {
+                    min_vfdusd_out: Uint128::zero(),
+                })
+                .unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("zero output"),
+        "unexpected: {err}"
+    );
+
+    assert_eq!(cw20_balance(&app, &ust1, &user), ust1_before);
+    assert_eq!(cw20_balance(&app, &vfdusd, &user), Uint128::zero());
+}
+
+#[test]
+fn instantiate_rejects_decimal_inversion() {
+    let mut app = App::default();
+    let owner = Addr::unchecked("owner");
+    let bot = Addr::unchecked("bot");
+
+    let oracle_id = app.store_code(oracle_contract());
+    let window_id = app.store_code(window_contract());
+    let cw20_id = app.store_code(cw20_mintable_contract());
+    let treasury_id = app.store_code(stub_treasury_contract());
+
+    let oracle = app
+        .instantiate_contract(
+            oracle_id,
+            owner.clone(),
+            &oracle_msg::InstantiateMsg {
+                governance: owner.to_string(),
+                oracle_operator: bot.to_string(),
+                initial_rate: Uint128::from(RATE_SCALE),
+            },
+            &[],
+            "oracle",
+            None,
+        )
+        .unwrap();
+
+    let vfdusd = app
+        .instantiate_contract(
+            cw20_id,
+            owner.clone(),
+            &cw20_mintable::msg::InstantiateMsg {
+                name: "vFDUSD".into(),
+                symbol: "vFDUSD".into(),
+                decimals: 4,
+                initial_balances: vec![],
+                mint: Some(MinterResponse {
+                    minter: owner.to_string(),
+                    cap: None,
+                }),
+                marketing: None,
+            },
+            &[],
+            "vfdusd",
+            None,
+        )
+        .unwrap();
+
+    let ust1 = app
+        .instantiate_contract(
+            cw20_id,
+            owner.clone(),
+            &cw20_mintable::msg::InstantiateMsg {
+                name: "UST1".into(),
+                symbol: "UST1".into(),
+                decimals: 6,
+                initial_balances: vec![],
+                mint: Some(MinterResponse {
+                    minter: owner.to_string(),
+                    cap: None,
+                }),
+                marketing: None,
+            },
+            &[],
+            "ust1",
+            None,
+        )
+        .unwrap();
+
+    let treasury = app
+        .instantiate_contract(
+            treasury_id,
+            owner.clone(),
+            &stub_treasury::InstantiateMsg { reject_pulls: false },
+            &[],
+            "treasury",
+            None,
+        )
+        .unwrap();
+
+    let err = app
+        .instantiate_contract(
+            window_id,
+            owner.clone(),
+            &InstantiateMsg {
+                governance: owner.to_string(),
+                oracle: oracle.to_string(),
+                vfdusd_token: vfdusd.to_string(),
+                cmm_treasury: Some(treasury.to_string()),
+                ust1_token: ust1.to_string(),
+                fee_bps: DEFAULT_FEE_BPS,
+                per_tx_ust1_limit: Uint128::from(DEFAULT_PER_TX_UST1_LIMIT),
+                rolling_24h_ust1_limit: Uint128::from(DEFAULT_ROLLING_24H_UST1_LIMIT),
+                max_oracle_age_sec: None,
+            },
+            &[],
+            "window",
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("decimals"),
+        "unexpected: {err}"
+    );
+}
+
+#[test]
+fn six_decimal_tokens_happy_path() {
+    let TestEnv {
+        app,
+        user,
+        vfdusd,
+        ust1,
+        ..
+    } = setup();
+
+    let v_info: cw20::TokenInfoResponse = app
+        .wrap()
+        .query_wasm_smart(&vfdusd, &cw20::Cw20QueryMsg::TokenInfo {})
+        .unwrap();
+    let u_info: cw20::TokenInfoResponse = app
+        .wrap()
+        .query_wasm_smart(&ust1, &cw20::Cw20QueryMsg::TokenInfo {})
+        .unwrap();
+    assert_eq!(v_info.decimals, 6);
+    assert_eq!(u_info.decimals, 6);
+    assert!(v_info.decimals >= u_info.decimals);
+    assert_eq!(cw20_balance(&app, &ust1, &user), Uint128::zero());
+}
+
+#[test]
+fn stale_oracle_blocks_withdraw() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        ust1,
+        window,
+        ..
+    } = setup();
+
+    app.execute_contract(
+        owner.clone(),
+        ust1.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(1_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let t = app.block_info().time.seconds();
+    app.update_block(|b| {
+        b.time = Timestamp::from_seconds(t + DEFAULT_MAX_ORACLE_AGE_SECS + 1);
+        b.height += 1;
+    });
+
+    let err = app
+        .execute_contract(
+            user,
+            ust1,
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: Uint128::from(100_000u128),
+                msg: to_json_binary(&Cw20HookMsg::Withdraw {
+                    min_vfdusd_out: Uint128::zero(),
+                })
+                .unwrap(),
+            },
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("stale"),
+        "unexpected: {err}"
+    );
+}
+
+#[test]
+fn rolling_window_resets_after_86400_sec() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        window,
+        ..
+    } = setup();
+
+    app.execute_contract(
+        owner.clone(),
+        window.clone(),
+        &ExecuteMsg::SetLimits {
+            per_tx_ust1_limit: Uint128::from(500_000_000u128),
+            rolling_24h_ust1_limit: Uint128::from(500_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(1_000_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let dep_amt = Uint128::from(300_000_000u128);
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: dep_amt,
+            msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let after_first: EffectiveSwapResponse = app
+        .wrap()
+        .query_wasm_smart(&window, &QueryMsg::EffectiveSwap {})
+        .unwrap();
+    assert!(after_first.rolling_volume_ust1 > Uint128::zero());
+
+    let window_start = after_first.rolling_window_start_sec;
+    app.update_block(|b| {
+        b.time = Timestamp::from_seconds(window_start + 86_400);
+        b.height += 1;
+    });
+
+    let cfg: ConfigResponse = app
+        .wrap()
+        .query_wasm_smart(&window, &QueryMsg::Config {})
+        .unwrap();
+    // Oracle would be stale after 86400s; refresh before second deposit.
+    app.execute_contract(
+        Addr::unchecked("bot"),
+        Addr::unchecked(cfg.oracle),
+        &oracle_msg::ExecuteMsg::UpdateRate {
+            new_rate: after_first.oracle.rate,
+        },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: dep_amt,
+            msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let after_reset: EffectiveSwapResponse = app
+        .wrap()
+        .query_wasm_smart(&window, &QueryMsg::EffectiveSwap {})
+        .unwrap();
+    assert_eq!(after_reset.rolling_window_start_sec, window_start + 86_400);
+    // Window reset: volume reflects only the second deposit, not cumulative.
+    assert_eq!(after_reset.rolling_volume_ust1, after_first.rolling_volume_ust1);
+}
+
+#[test]
+fn governance_propose_and_accept() {
+    let TestEnv {
+        mut app,
+        owner,
+        window,
+        ..
+    } = setup();
+
+    let new_gov = Addr::unchecked("new_gov");
+
+    app.execute_contract(
+        owner.clone(),
+        window.clone(),
+        &ExecuteMsg::ProposeGovernance {
+            address: new_gov.to_string(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let err = app
+        .execute_contract(
+            owner.clone(),
+            window.clone(),
+            &ExecuteMsg::AcceptGovernance {},
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        err.root_cause().to_string().contains("invalid governance"),
+        "unexpected: {err}"
+    );
+
+    app.execute_contract(
+        new_gov.clone(),
+        window.clone(),
+        &ExecuteMsg::AcceptGovernance {},
+        &[],
+    )
+    .unwrap();
+
+    let cfg: ConfigResponse = app
+        .wrap()
+        .query_wasm_smart(&window, &QueryMsg::Config {})
+        .unwrap();
+    assert_eq!(cfg.governance, new_gov.to_string());
 }
