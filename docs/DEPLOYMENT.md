@@ -25,6 +25,14 @@ The oracle service applies the **same** rate policy as the chain before broadcas
 - **INV-ORACLE-DAILY-001** — UTC calendar-day increase cap (2%).
 - **INV-ORACLE-MONO-001** — monotonic non-decreasing on-chain rate.
 
+Window swap guards (audit hardening, [issue #25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25); see [`audits/INTERNAL_KIMIK3_1786162831.md`](../audits/INTERNAL_KIMIK3_1786162831.md)):
+
+- **INV-DECIMALS-001** — at `ust1-window` instantiate, vFDUSD token decimals must be **≥** UST1 token decimals (`validate_token_decimals`; atom scaling assumes D≥U).
+- **INV-SWAP-003** — deposit reverts when computed `ust1_out == 0` (no treasury forward / `Mint(0)`).
+- **INV-SWAP-004** — withdraw reverts when computed `v_out == 0` (no burn-for-nothing).
+
+Agent skill for these invariants and ops knobs: [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md).
+
 ---
 
 ## Terra Classic CLI (`terrad`): gas, fees, and common mistakes
@@ -449,7 +457,7 @@ Until `last_update_sec` is set by a successful `UpdateRate`, window swaps may re
 
 ## Render dashboard setup (no `render.yaml`)
 
-`ust1-oracle-service` is a **long-running process** with structured logs and **no HTTP API**. On Render, prefer a **Background Worker** (not a public Web Service) unless you add a separate health HTTP sidecar.
+`ust1-oracle-service` is a **long-running process** with structured logs. It exposes a minimal **liveness** HTTP endpoint (`GET /healthz`) for platform health checks; there is no metrics API.
 
 ### Create the service (UI)
 
@@ -472,8 +480,9 @@ Until `last_update_sec` is set by a successful `UpdateRate`, window swaps may re
 ### Health / alerting
 
 - Enable Render **notifications** for **crashes and deploy failures**.
+- **HTTP health check:** point Render at `GET /healthz` on the bind address from `HEALTHZ_BIND` (default `0.0.0.0:8080`). This is **liveness only** (process up) — it does **not** prove a fresh on-chain oracle rate.
 - The binary emits **`error!`** if no successful broadcast exceeds `ORACLE_MAX_SILENCE_SECS` — forward logs to your SIEM or log drain and page on that pattern.
-- Do **not** rely on Render’s HTTP health check for this binary unless you add an HTTP probe.
+- Combine `/healthz` with log-based silence alerts; neither alone guarantees rate freshness.
 
 ---
 
@@ -486,6 +495,7 @@ Loaded in [`Config::from_env`](../oracle-service/src/config.rs):
 | `BSC_RPC_URLS` | Comma-separated HTTPS RPC URLs (**≥ 2**). |
 | `BSC_ALLOWED_CHAIN_IDS` | Default `56`; widen only for non-mainnet testing. |
 | `BSC_CONFIRMATION_BLOCKS` | Reorg depth (default 15). |
+| `BSC_RPC_TIMEOUT_SECS` | Per-RPC HTTP timeout for BSC reads (default 30). |
 | `VENUS_VTOKEN_ADDRESS` | On BSC-mainnet-only allowlist, must be canonical vFDUSD vToken (see `config.rs`). |
 | `TERRA_LCD_URL` | HTTPS LCD base URL (used for queries + broadcast). |
 | `TERRA_CHAIN_ID` | `columbus-5` on mainnet. |
@@ -493,6 +503,9 @@ Loaded in [`Config::from_env`](../oracle-service/src/config.rs):
 | `ORACLE_CONTRACT` | `ust1-oracle` address. |
 | `POLL_INTERVAL_SECS` | Default 21600 s. |
 | `ORACLE_MAX_SILENCE_SECS` | Loud log if no successful broadcast (default 28800 s). |
+| `HEALTHZ_BIND` | Liveness HTTP bind (`host:port`, default `0.0.0.0:8080`). Set `off`/`disabled`/empty to disable. Probe is process-up only (`GET /healthz`). |
+| `TICK_TIMEOUT_SECS` | Wall-clock cap per poll tick (BSC + Terra paths); default 120. |
+| `TERRA_GAS_PRICE` | Configured gas floor in uluna/gas (default `0.015`; alias `TERRA_GAS_PRICE_ULUNA`). Service uses `max(configured, network_min)` when LCD `/cosmos/base/node/v1beta1/config` probe succeeds; otherwise the configured floor. |
 
 **HTTPS:** production must use `https://`. Local-only: `DEV_ALLOW_HTTP=1` for loopback (see `config.rs`).
 
@@ -559,6 +572,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-08-08 | Audit hardening bundle ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)): `/healthz` liveness, tick/gas/RPC timeouts, INV-SWAP-003/004 dust guards, INV-DECIMALS-001, adaptive Terra gas price; skill [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md). |
 | 2026-08-08 | Window withdraw = treasury `InstantWithdrawCw20` (Option 3); Phase 5 ops = migrate window + `SetCw20Spender`/`limit_24h` ([issue #20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20); depends on ustr-cmm #6/#7). |
 | 2026-07-30 | Mainnet CW20s live: **vFDUSD** `terra1mnl9…svj3`, **UST1** `terra1f0eq…fy72` (code **10184**); registry + README updated ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-07-30 | Phase 2/3 operator runbook: code id **10184**, known deployer/gov/BSC addresses, Venus vFDUSD **LockUnlock** + Terra **mint_burn**, decimals Terra 6 / BSC 8 ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |

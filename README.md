@@ -44,8 +44,12 @@ Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/Pla
 ## Invariants (index)
 
 - **INV-MATH-001 / INV-SWAP-001 / INV-SWAP-002** — `ust1-common/src/math.rs` (reverse path: `inv_swap_002_*` vector tests lock the fee-then-rate floor semantics)
+- **INV-SWAP-003 / INV-SWAP-004** — `ust1-window/src/contract.rs` (deposit/withdraw revert on zero output; math dust floors in `ust1-common` before contract guard) ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25))
+- **INV-DECIMALS-001** — `ust1-window/src/contract.rs` (`validate_token_decimals`: vFDUSD decimals ≥ UST1 decimals at instantiate/migrate) ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25))
+- **INV-MINTER-001** — `cw20-mintable` fork: `UpdateMinter` clears old primary from `MINTERS` ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25); [cw20-mintable#1](https://github.com/PlasticDigits/cw20-mintable/pull/1))
 - **INV-MATH-002** — `ust1-common/src/fee_split.rs` + `ust1-window` / `cmm-native-wrap` event attributes and `Effective*` queries (GitLab #17)
 - **INV-ORACLE-THROTTLE-001 / INV-ORACLE-DAILY-001 / INV-ORACLE-MONO-001** — `ust1-common/src/oracle_policy.rs` + `ust1-oracle`
+- **INV-ORACLE-TICK-001 / INV-ORACLE-ACCOUNT-001 / INV-ORACLE-GAS-001 / INV-ORACLE-HEALTHZ-001** — `oracle-service` tick timeout, fail-hard account parse, adaptive gas, process-up `/healthz` ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25); [`skills/audit-hardening-bundle`](skills/audit-hardening-bundle/SKILL.md))
 - **INV-LIMIT-001** — `ust1-window/src/state.rs`, enforced in `contract.rs`
 - **INV-WITHDRAW-001 / INV-WITHDRAW-002** — `ust1-window/src/state.rs` + `treasury.rs` / `contract.rs` (InstantWithdrawCw20; burn-then-pull atomicity) ([#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20))
 - **INV-LIMIT-NATIVE-001** — `cmm-native-wrap/src/state.rs` / `limits.rs`, enforced in `wrap.rs` and `unwrap.rs`
@@ -69,9 +73,9 @@ The `ust1-oracle-service` binary is intentionally **lightweight**: it uses **str
 
 **Production-style deployment** (Terra Classic wasm + BSC oracle path + operator checklist + address registry) is documented in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). After exporting env vars, run `make verify-oracle-env` to confirm required keys are present before starting the service.
 
-**Deployment** (e.g. [Render](https://render.com)): the platform should provide an **HTTP health check** and **uptime / failure alerting** on the service URL or process, similar to Render’s built-in health checks and notifications. Whatever host you use must offer **comparable external monitoring** so silent process hangs or repeated crashes are surfaced; the in-process log alert is not a substitute for off-platform paging.
+**Deployment** (e.g. [Render](https://render.com)): the oracle service exposes a **liveness-only** HTTP probe — `GET /healthz` returns 200 when the process is up (bind via `HEALTHZ_BIND`, default `0.0.0.0:8080`; set `off` to disable). This does **not** imply on-chain rate freshness or a recent successful `UpdateRate`; pair it with log alerts (`ORACLE_MAX_SILENCE_SECS`) and off-platform paging. Tick-level timeouts and gas pricing knobs (`TICK_TIMEOUT_SECS`, `TERRA_GAS_PRICE`, `BSC_RPC_TIMEOUT_SECS`) are documented in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Agent notes: [`skills/audit-hardening-bundle`](skills/audit-hardening-bundle/SKILL.md) ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)).
 
-Relevant environment variables: `ORACLE_MAX_SILENCE_SECS`, `POLL_INTERVAL_SECS`, plus the oracle env vars listed under Local development above and in `docs/DEPLOYMENT.md`.
+Relevant environment variables: `ORACLE_MAX_SILENCE_SECS`, `POLL_INTERVAL_SECS`, `HEALTHZ_BIND`, plus the oracle env vars listed under Local development above and in `docs/DEPLOYMENT.md`.
 
 ## Build optimized Wasm
 

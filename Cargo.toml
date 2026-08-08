@@ -33,7 +33,8 @@ ust1-cmm = { git = "https://gitlab.com/PlasticDigits/ust1-window.git", rev = "96
 ust1-oracle = { path = "contracts/ust1-oracle", version = "0.1.1", features = [
   "library",
 ] }
-cw20-mintable = { git = "https://github.com/PlasticDigits/cw20-mintable", rev = "73a206b5c39c5bd8f9d3574bda32fc5ae8f52ec8", features = ["library"] }
+# M-8 / INV-MINTER-001 (ust1-window#25): UpdateMinter clears old primary from MINTERS.
+cw20-mintable = { git = "https://github.com/PlasticDigits/cw20-mintable", rev = "8a50c360e6c0e961062e6fa0e6f10e780c3b8ae8", features = ["library"] }
 proptest = "1"
 
 [profile.release]

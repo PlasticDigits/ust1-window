@@ -26,6 +26,8 @@ pub struct TerraSignerConfig {
     pub chain_id: String,
     pub mnemonic: SecretString,
     pub gas_limit: Option<u64>,
+    /// Configured gas price floor (uluna per gas unit).
+    pub gas_price: f64,
 }
 
 pub struct TerraSigner {
@@ -35,9 +37,10 @@ pub struct TerraSigner {
     chain_id: String,
     client: Client,
     gas_limit: u64,
+    gas_price: f64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct AccountInfo {
     pub sequence: u64,
     pub account_number: u64,
@@ -68,6 +71,7 @@ impl TerraSigner {
             chain_id: config.chain_id,
             client,
             gas_limit: config.gas_limit.unwrap_or(DEFAULT_GAS_LIMIT),
+            gas_price: config.gas_price,
         })
     }
 
@@ -85,31 +89,40 @@ impl TerraSigner {
             return Err(eyre!("account query {}", response.status()));
         }
         let data: serde_json::Value = response.json().await?;
-        let account = data
-            .get("account")
-            .ok_or_else(|| eyre!("missing account"))?;
-        let sequence = account
-            .get("sequence")
-            .or_else(|| account.get("base_account").and_then(|b| b.get("sequence")))
-            .and_then(|v| v.as_str())
-            .unwrap_or("0")
-            .parse()
-            .unwrap_or(0);
-        let account_number = account
-            .get("account_number")
-            .or_else(|| {
-                account
-                    .get("base_account")
-                    .and_then(|b| b.get("account_number"))
-            })
-            .and_then(|v| v.as_str())
-            .unwrap_or("0")
-            .parse()
-            .unwrap_or(0);
-        Ok(AccountInfo {
-            sequence,
-            account_number,
-        })
+        parse_account_info(&data)
+    }
+
+    /// Query the node minimum gas price when the LCD exposes it.
+    ///
+    /// Terra Classic nodes often serve `/cosmos/base/node/v1beta1/config` with
+    /// `minimum_gas_price` like `"0.015uluna"`. When the endpoint is missing or unparsable,
+    /// returns `Ok(None)` so callers can fall back to the configured floor.
+    pub async fn query_network_min_gas_price(&self) -> Result<Option<f64>> {
+        let url = format!("{}/cosmos/base/node/v1beta1/config", self.lcd_url);
+        let response = self.client.get(&url).send().await?;
+        if !response.status().is_success() {
+            return Err(eyre!(
+                "node config query {} (fallback to configured TERRA_GAS_PRICE)",
+                response.status()
+            ));
+        }
+        let data: serde_json::Value = response.json().await?;
+        Ok(parse_minimum_gas_price(&data))
+    }
+
+    /// `max(configured, network_min)` when the network probe succeeds; otherwise configured.
+    pub async fn resolve_gas_price(&self) -> f64 {
+        match self.query_network_min_gas_price().await {
+            Ok(network_min) => effective_gas_price(self.gas_price, network_min),
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    configured = self.gas_price,
+                    "network min gas price probe failed; using configured TERRA_GAS_PRICE floor"
+                );
+                self.gas_price
+            }
+        }
     }
 
     pub async fn query_wasm_smart<T: serde::de::DeserializeOwned>(
@@ -173,8 +186,8 @@ impl TerraSigner {
         msg: &impl Serialize,
     ) -> Result<String> {
         let account_info = self.get_account_info().await?;
-        let gas_price = DEFAULT_GAS_PRICE;
-        let fee_amount = ((self.gas_limit as f64) * gas_price).ceil() as u128;
+        let gas_price = self.resolve_gas_price().await;
+        let fee_amount = compute_fee_amount(self.gas_limit, gas_price);
         let msg_json = serde_json::to_vec(msg)?;
         let execute_msg = MsgExecuteContract {
             sender: self.address.clone(),
@@ -239,5 +252,382 @@ impl TerraSigner {
             return Err(eyre!("broadcast tx failed code {}: {}", code, raw_log));
         }
         Ok(txhash)
+    }
+}
+
+/// Parse LCD `/cosmos/auth/v1beta1/accounts/{addr}` JSON into sequence + account_number.
+pub(crate) fn parse_account_info(value: &serde_json::Value) -> Result<AccountInfo> {
+    let account = value
+        .get("account")
+        .ok_or_else(|| eyre!("missing account field in LCD response"))?;
+    let inner = resolve_account_object(account)?;
+    let sequence = extract_u64_field(inner, "sequence")?;
+    let account_number = extract_u64_field(inner, "account_number")?;
+    Ok(AccountInfo {
+        sequence,
+        account_number,
+    })
+}
+
+/// Walk common columbus-5 account wrappers (`BaseAccount`, vesting, etc.).
+fn resolve_account_object(account: &serde_json::Value) -> Result<&serde_json::Value> {
+    if account.get("sequence").is_some() || account.get("account_number").is_some() {
+        return Ok(account);
+    }
+    for key in [
+        "base_account",
+        "base_vesting_account",
+        "base_delayed_vesting_account",
+        "base_continuous_vesting_account",
+        "base_periodic_vesting_account",
+    ] {
+        if let Some(nested) = account.get(key) {
+            return resolve_account_object(nested);
+        }
+    }
+    Err(eyre!(
+        "could not locate sequence/account_number in account JSON (type={})",
+        account
+            .get("@type")
+            .and_then(|t| t.as_str())
+            .unwrap_or("unknown")
+    ))
+}
+
+fn extract_u64_field(obj: &serde_json::Value, field: &str) -> Result<u64> {
+    let value = obj
+        .get(field)
+        .ok_or_else(|| eyre!("missing account field {field}"))?;
+    parse_json_u64(value, field)
+}
+
+fn parse_json_u64(value: &serde_json::Value, field: &str) -> Result<u64> {
+    match value {
+        serde_json::Value::Number(n) => n
+            .as_u64()
+            .ok_or_else(|| eyre!("{field} is not a valid u64 number")),
+        serde_json::Value::String(s) => s
+            .parse::<u64>()
+            .map_err(|e| eyre!("{field} string {:?} is not a valid u64: {e}", s)),
+        _ => Err(eyre!("{field} must be a string or number, got {value}")),
+    }
+}
+
+/// Parse `minimum_gas_price` from `/cosmos/base/node/v1beta1/config` (e.g. `"0.015uluna"`).
+pub(crate) fn parse_minimum_gas_price(value: &serde_json::Value) -> Option<f64> {
+    let raw = value
+        .get("config")
+        .and_then(|c| c.get("minimum_gas_price"))
+        .or_else(|| value.get("minimum_gas_price"))
+        .and_then(|v| v.as_str())?;
+    parse_gas_price_denom(raw)
+}
+
+fn parse_gas_price_denom(raw: &str) -> Option<f64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (num, denom) = if let Some(idx) = trimmed.find("uluna") {
+        (&trimmed[..idx], "uluna")
+    } else if let Some(idx) = trimmed.find("uusd") {
+        (&trimmed[..idx], "uusd")
+    } else {
+        (trimmed, "")
+    };
+    if !denom.is_empty() && num.is_empty() {
+        return None;
+    }
+    num.parse::<f64>().ok()
+}
+
+/// Use the higher of configured floor and network minimum when the probe succeeds.
+pub(crate) fn effective_gas_price(configured: f64, network_min: Option<f64>) -> f64 {
+    match network_min {
+        Some(network) if network > configured => network,
+        _ => configured,
+    }
+}
+
+/// Fee amount in uluna: `ceil(gas_limit * gas_price)`.
+pub(crate) fn compute_fee_amount(gas_limit: u64, gas_price: f64) -> u128 {
+    ((gas_limit as f64) * gas_price).ceil() as u128
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use secrecy::SecretString;
+    use serde_json::json;
+
+    #[test]
+    fn parse_base_account_top_level() {
+        let body = json!({
+            "account": {
+                "@type": "/cosmos.auth.v1beta1.BaseAccount",
+                "account_number": "42",
+                "sequence": "7"
+            }
+        });
+        let info = parse_account_info(&body).unwrap();
+        assert_eq!(
+            info,
+            AccountInfo {
+                sequence: 7,
+                account_number: 42
+            }
+        );
+    }
+
+    #[test]
+    fn parse_base_account_numeric_fields() {
+        let body = json!({
+            "account": {
+                "@type": "/cosmos.auth.v1beta1.BaseAccount",
+                "account_number": 99,
+                "sequence": 3
+            }
+        });
+        let info = parse_account_info(&body).unwrap();
+        assert_eq!(
+            info,
+            AccountInfo {
+                sequence: 3,
+                account_number: 99
+            }
+        );
+    }
+
+    #[test]
+    fn parse_vesting_wrapper() {
+        let body = json!({
+            "account": {
+                "@type": "/cosmos.vesting.v1beta1.ContinuousVestingAccount",
+                "base_vesting_account": {
+                    "base_account": {
+                        "account_number": "100",
+                        "sequence": "5"
+                    }
+                }
+            }
+        });
+        let info = parse_account_info(&body).unwrap();
+        assert_eq!(
+            info,
+            AccountInfo {
+                sequence: 5,
+                account_number: 100
+            }
+        );
+    }
+
+    #[test]
+    fn parse_missing_sequence_errors() {
+        let body = json!({
+            "account": {
+                "@type": "/cosmos.auth.v1beta1.BaseAccount",
+                "account_number": "1"
+            }
+        });
+        let err = parse_account_info(&body).unwrap_err();
+        assert!(err.to_string().contains("sequence"));
+    }
+
+    #[test]
+    fn parse_missing_account_field_errors() {
+        let body = json!({ "foo": "bar" });
+        let err = parse_account_info(&body).unwrap_err();
+        assert!(err.to_string().contains("missing account"));
+    }
+
+    #[test]
+    fn effective_gas_price_uses_max() {
+        assert_eq!(effective_gas_price(0.015, Some(0.02)), 0.02);
+        assert_eq!(effective_gas_price(0.015, Some(0.01)), 0.015);
+        assert_eq!(effective_gas_price(0.015, None), 0.015);
+    }
+
+    #[test]
+    fn compute_fee_amount_ceils() {
+        assert_eq!(compute_fee_amount(500_000, 0.015), 7_500);
+        assert_eq!(compute_fee_amount(1, 0.015), 1);
+    }
+
+    #[test]
+    fn parse_minimum_gas_price_uluna() {
+        let body = json!({
+            "config": {
+                "minimum_gas_price": "0.015uluna"
+            }
+        });
+        assert_eq!(parse_minimum_gas_price(&body), Some(0.015));
+    }
+
+    #[test]
+    fn parse_minimum_gas_price_missing() {
+        assert_eq!(parse_minimum_gas_price(&json!({})), None);
+    }
+
+    #[tokio::test]
+    async fn get_account_info_wiremock_base_account() {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/cosmos/auth/v1beta1/accounts/terra1.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "account": {
+                    "@type": "/cosmos.auth.v1beta1.BaseAccount",
+                    "account_number": "12",
+                    "sequence": "4"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let signer = TerraSigner::new(TerraSignerConfig {
+            lcd_url: server.uri(),
+            chain_id: "columbus-5".into(),
+            mnemonic: SecretString::new(
+                "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+                    .to_string()
+                    .into_boxed_str(),
+            ),
+            gas_limit: None,
+            gas_price: DEFAULT_GAS_PRICE,
+        })
+        .unwrap();
+
+        let info = signer.get_account_info().await.unwrap();
+        assert_eq!(
+            info,
+            AccountInfo {
+                sequence: 4,
+                account_number: 12
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn get_account_info_wiremock_missing_sequence_errors() {
+        use wiremock::matchers::{method, path_regex};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"/cosmos/auth/v1beta1/accounts/terra1.*"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "account": {
+                    "@type": "/cosmos.auth.v1beta1.BaseAccount",
+                    "account_number": "1"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let signer = TerraSigner::new(TerraSignerConfig {
+            lcd_url: server.uri(),
+            chain_id: "columbus-5".into(),
+            mnemonic: SecretString::new(
+                "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+                    .to_string()
+                    .into_boxed_str(),
+            ),
+            gas_limit: None,
+            gas_price: DEFAULT_GAS_PRICE,
+        })
+        .unwrap();
+
+        let err = signer.get_account_info().await.unwrap_err();
+        assert!(err.to_string().contains("sequence"));
+    }
+
+    #[tokio::test]
+    async fn resolve_gas_price_uses_network_max() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/cosmos/base/node/v1beta1/config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "config": { "minimum_gas_price": "0.02uluna" }
+            })))
+            .mount(&server)
+            .await;
+
+        let signer = TerraSigner::new(TerraSignerConfig {
+            lcd_url: server.uri(),
+            chain_id: "columbus-5".into(),
+            mnemonic: SecretString::new(
+                "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+                    .to_string()
+                    .into_boxed_str(),
+            ),
+            gas_limit: None,
+            gas_price: 0.015,
+        })
+        .unwrap();
+
+        assert_eq!(signer.resolve_gas_price().await, 0.02);
+    }
+
+    #[tokio::test]
+    async fn resolve_gas_price_probe_failure_uses_configured() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/cosmos/base/node/v1beta1/config"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount(&server)
+            .await;
+
+        let signer = TerraSigner::new(TerraSignerConfig {
+            lcd_url: server.uri(),
+            chain_id: "columbus-5".into(),
+            mnemonic: SecretString::new(
+                "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+                    .to_string()
+                    .into_boxed_str(),
+            ),
+            gas_limit: None,
+            gas_price: 0.015,
+        })
+        .unwrap();
+
+        assert_eq!(signer.resolve_gas_price().await, 0.015);
+    }
+
+    #[tokio::test]
+    async fn query_network_min_gas_price_wiremock() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/cosmos/base/node/v1beta1/config"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "config": { "minimum_gas_price": "0.02uluna" }
+            })))
+            .mount(&server)
+            .await;
+
+        let signer = TerraSigner::new(TerraSignerConfig {
+            lcd_url: server.uri(),
+            chain_id: "columbus-5".into(),
+            mnemonic: SecretString::new(
+                "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+                    .to_string()
+                    .into_boxed_str(),
+            ),
+            gas_limit: None,
+            gas_price: DEFAULT_GAS_PRICE,
+        })
+        .unwrap();
+
+        assert_eq!(signer.query_network_min_gas_price().await.unwrap(), Some(0.02));
     }
 }

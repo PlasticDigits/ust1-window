@@ -54,6 +54,24 @@ fn parse_allowed_bsc_chain_ids() -> Result<Vec<u64>> {
     Ok(ids)
 }
 
+fn parse_healthz_bind() -> String {
+    match std::env::var("HEALTHZ_BIND") {
+        Ok(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty()
+                || trimmed.eq_ignore_ascii_case("off")
+                || trimmed.eq_ignore_ascii_case("disabled")
+                || trimmed.eq_ignore_ascii_case("none")
+            {
+                String::new()
+            } else {
+                trimmed.to_string()
+            }
+        }
+        Err(_) => "0.0.0.0:8080".to_string(),
+    }
+}
+
 fn dev_allow_http() -> bool {
     matches!(
         std::env::var("DEV_ALLOW_HTTP").as_deref(),
@@ -84,6 +102,8 @@ pub struct Config {
     pub bsc_rpc_urls: Vec<String>,
     /// How many blocks behind `latest` to read `exchangeRateStored` (reorg protection).
     pub bsc_confirmation_blocks: u64,
+    /// Per-request timeout for BSC JSON-RPC HTTP transport (seconds).
+    pub bsc_rpc_timeout_secs: u64,
     /// Allowed `eth_chainId` values for every BSC RPC URL (default `56`).
     /// Use `56,97,31337` to allow BSC mainnet, BSC testnet (Chapel), and Anvil localnet.
     pub allowed_bsc_chain_ids: Vec<u64>,
@@ -92,10 +112,16 @@ pub struct Config {
     pub terra_chain_id: String,
     /// Operator seed phrase; only call `ExposeSecret::expose_secret` at signing boundaries.
     pub terra_mnemonic: SecretString,
+    /// Configured gas price floor in uluna per gas unit (adaptive max with network min).
+    pub terra_gas_price: f64,
     pub oracle_contract: String,
     pub poll_interval_secs: u64,
+    /// Per-tick wall-clock timeout; on expiry the loop logs and continues (default 120s).
+    pub tick_timeout_secs: u64,
     /// Emit a loud log if no successful Terra broadcast for this many seconds (default 8h).
     pub max_silence_since_broadcast_secs: u64,
+    /// Bind address for `GET /healthz` (process-up only). Empty disables the listener.
+    pub healthz_bind: String,
 }
 
 impl Config {
@@ -120,12 +146,25 @@ impl Config {
         let terra_lcd_url =
             std::env::var("TERRA_LCD_URL").map_err(|_| eyre!("TERRA_LCD_URL is required"))?;
         validate_https_url(&terra_lcd_url, "TERRA_LCD_URL", allow_dev_http)?;
+        let healthz_bind = parse_healthz_bind();
+        let terra_gas_price = std::env::var("TERRA_GAS_PRICE")
+            .or_else(|_| std::env::var("TERRA_GAS_PRICE_ULUNA"))
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(crate::terra_tx::DEFAULT_GAS_PRICE);
+        if terra_gas_price <= 0.0 {
+            return Err(eyre!("TERRA_GAS_PRICE / TERRA_GAS_PRICE_ULUNA must be positive"));
+        }
         Ok(Config {
             bsc_rpc_urls,
             bsc_confirmation_blocks: std::env::var("BSC_CONFIRMATION_BLOCKS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(15),
+            bsc_rpc_timeout_secs: std::env::var("BSC_RPC_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(30),
             allowed_bsc_chain_ids,
             venus_vtoken_address,
             terra_lcd_url,
@@ -136,16 +175,22 @@ impl Config {
                     .map_err(|_| eyre!("TERRA_MNEMONIC is required"))?
                     .into_boxed_str(),
             ),
+            terra_gas_price,
             oracle_contract: std::env::var("ORACLE_CONTRACT")
                 .map_err(|_| eyre!("ORACLE_CONTRACT is required"))?,
             poll_interval_secs: std::env::var("POLL_INTERVAL_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(21_600),
+            tick_timeout_secs: std::env::var("TICK_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(120),
             max_silence_since_broadcast_secs: std::env::var("ORACLE_MAX_SILENCE_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(28_800),
+            healthz_bind,
         })
     }
 }
@@ -186,6 +231,7 @@ mod tests {
         let cfg = Config {
             bsc_rpc_urls: vec!["http://example".into()],
             bsc_confirmation_blocks: 15,
+            bsc_rpc_timeout_secs: 30,
             allowed_bsc_chain_ids: vec![56],
             venus_vtoken_address: CANONICAL_VENUS_VFDUSD_BSC_MAINNET.into(),
             terra_lcd_url: String::new(),
@@ -195,9 +241,12 @@ mod tests {
                     .to_string()
                     .into_boxed_str(),
             ),
+            terra_gas_price: crate::terra_tx::DEFAULT_GAS_PRICE,
             oracle_contract: String::new(),
             poll_interval_secs: 0,
+            tick_timeout_secs: 120,
             max_silence_since_broadcast_secs: 28_800,
+            healthz_bind: String::new(),
         };
         let s = format!("{cfg:?}");
         assert!(

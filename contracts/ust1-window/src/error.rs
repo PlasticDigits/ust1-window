@@ -27,6 +27,12 @@ pub enum ContractError {
     #[error("below minimum vFDUSD receive")]
     BelowMinimum {},
 
+    #[error("zero output amount (dust)")]
+    ZeroOutput {},
+
+    #[error("vFDUSD decimals ({vfdusd}) must be >= UST1 decimals ({ust1})")]
+    InvalidTokenDecimals { vfdusd: u8, ust1: u8 },
+
     #[error("oracle rate is stale or not yet committed on-chain (run at least one UpdateRate)")]
     OracleStale {},
 

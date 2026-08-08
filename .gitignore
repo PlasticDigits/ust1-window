@@ -2,5 +2,7 @@
 **/target
 /artifacts
 .env
+.env.*
 .venv
 *.swp
+**/proptest-regressions/

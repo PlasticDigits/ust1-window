@@ -4,12 +4,15 @@ use alloy::eips::{BlockId, BlockNumberOrTag};
 use alloy::network::Ethereum;
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder};
+use alloy::rpc::client::ClientBuilder;
 use alloy::sol;
+use alloy::transports::http::Http;
 use alloy::transports::Transport;
 use eyre::{eyre, Result};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{LazyLock, Mutex};
+use std::time::Duration;
 
 sol! {
     #[sol(rpc)]
@@ -20,6 +23,24 @@ sol! {
 
 static CHAIN_ID_CACHE: LazyLock<Mutex<HashMap<String, u64>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Build an HTTP JSON-RPC provider with an explicit reqwest transport timeout.
+pub(crate) fn build_http_provider(
+    rpc_url: &str,
+    timeout_secs: u64,
+) -> Result<impl Provider<Http<reqwest::Client>, Ethereum>> {
+    let url = rpc_url
+        .parse()
+        .map_err(|e| eyre!("invalid BSC RPC URL {rpc_url}: {e}"))?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| eyre!("reqwest client: {e}"))?;
+    let transport = Http::with_client(client, url);
+    let is_local = transport.guess_local();
+    let rpc_client = ClientBuilder::default().transport(transport, is_local);
+    Ok(ProviderBuilder::new().on_client(rpc_client))
+}
 
 /// Verify `eth_chainId` for this RPC URL against `allowed_chain_ids`, caching the result per URL.
 pub async fn verify_bsc_rpc_chain_id<T>(
@@ -70,9 +91,13 @@ where
 }
 
 /// Fail fast at startup: every configured RPC URL must match the allowed chain list.
-pub async fn verify_all_bsc_rpc_urls(urls: &[String], allowed_chain_ids: &[u64]) -> Result<()> {
+pub async fn verify_all_bsc_rpc_urls(
+    urls: &[String],
+    allowed_chain_ids: &[u64],
+    rpc_timeout_secs: u64,
+) -> Result<()> {
     for url in urls {
-        let provider = ProviderBuilder::new().on_http(url.parse()?);
+        let provider = build_http_provider(url, rpc_timeout_secs)?;
         verify_bsc_rpc_chain_id(url, &provider, allowed_chain_ids).await?;
     }
     Ok(())
@@ -83,8 +108,9 @@ pub async fn read_exchange_rate_stored(
     vtoken: &str,
     confirmation_blocks: u64,
     allowed_chain_ids: &[u64],
+    rpc_timeout_secs: u64,
 ) -> Result<cosmwasm_std::Uint128> {
-    let provider = ProviderBuilder::new().on_http(rpc_url.parse()?);
+    let provider = build_http_provider(&rpc_url, rpc_timeout_secs)?;
     verify_bsc_rpc_chain_id(&rpc_url, &provider, allowed_chain_ids).await?;
 
     let latest = provider

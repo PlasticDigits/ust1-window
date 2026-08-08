@@ -10,8 +10,9 @@ name = "ust1-oracle-service"
 path = "src/main.rs"
 
 [dependencies]
-tokio = { version = "1.36", features = ["rt-multi-thread", "macros", "signal", "time"] }
+tokio = { version = "1.36", features = ["rt-multi-thread", "macros", "signal", "time", "net"] }
 alloy = { version = "0.8", features = ["full"] }
+alloy-transport-http = "0.8"
 reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -27,6 +28,11 @@ base64 = "0.22"
 ust1-common = { path = "../smartcontracts-terraclassic/packages/ust1-common" }
 ust1-oracle = { path = "../contracts/ust1-oracle", features = ["library"] }
 secrecy = "0.10.3"
+axum = "0.7"
 
 [dev-dependencies]
 tokio-test = "0.4"
+wiremock = "0.6"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+hyper = "1"

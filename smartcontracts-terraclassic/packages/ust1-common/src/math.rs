@@ -82,6 +82,7 @@ pub fn max_rate_after_daily_cap(day_baseline: Uint128) -> Result<Uint128, MathEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cosmwasm_std::Uint256;
     use proptest::prelude::*;
 
     /// **INV-MATH-001**: RATE_SCALE semantics (spot check).
@@ -147,6 +148,86 @@ mod tests {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // u128::MAX / RATE_SCALE edge semantics (TEST-21 / L-20)
+    //
+    // Intentional rejects (auditors: these are expected, not bugs):
+    // - `ust1_after_fee_to_vfdusd(_, rate=0)` → `MathError::DivisionByZero`
+    // - `fee_bps > BPS_DENOM` → `MathError::InvalidFeeBps`
+    // - `amount * rate` or `after_fee * RATE_SCALE` overflow `Uint256` → `MathError::Overflow`
+    // - `Uint256` quotient does not fit `Uint128` → `MathError::TooLarge`
+    // -------------------------------------------------------------------------
+
+    /// Largest forward conversion that still fits `Uint128` at 1:1 rate.
+    #[test]
+    fn edge_forward_max_at_one_to_one_rate() {
+        let rate = Uint128::from(RATE_SCALE);
+        let max = Uint128::from(u128::MAX);
+        let out = vfdusd_to_ust1_before_fee(max, rate).unwrap();
+        assert_eq!(out, max);
+    }
+
+    /// `amount * rate` fits `Uint256` but quotient exceeds `u128::MAX` → `TooLarge`.
+    #[test]
+    fn edge_forward_product_overflows_u128() {
+        let max = Uint128::from(u128::MAX);
+        let err = vfdusd_to_ust1_before_fee(max, max).unwrap_err();
+        assert_eq!(err, MathError::TooLarge);
+    }
+
+    /// Reverse leg: zero rate is a hard reject (not a silent zero).
+    #[test]
+    fn edge_reverse_zero_rate_division_by_zero() {
+        let err = ust1_after_fee_to_vfdusd(Uint128::one(), Uint128::zero()).unwrap_err();
+        assert_eq!(err, MathError::DivisionByZero);
+    }
+
+    /// `after_fee * RATE_SCALE` exceeds `u128::MAX` on narrow rate → `TooLarge`.
+    #[test]
+    fn edge_reverse_scale_overflows_u128() {
+        let max = Uint128::from(u128::MAX);
+        let err = ust1_after_fee_to_vfdusd(max, Uint128::one()).unwrap_err();
+        assert_eq!(err, MathError::TooLarge);
+    }
+
+    /// Floor semantics: tiny after-fee notional at huge rate yields zero (contract layer rejects via INV-SWAP-004).
+    #[test]
+    fn edge_reverse_floor_to_zero_at_huge_rate() {
+        let huge_rate = Uint128::from(u128::MAX);
+        let out = ust1_after_fee_to_vfdusd(Uint128::one(), huge_rate).unwrap();
+        assert_eq!(out, Uint128::zero());
+    }
+
+    /// Full withdraw at `u128::MAX` gross overflows the fee multiply (`* BPS_DENOM`) — intentional reject.
+    #[test]
+    fn edge_withdraw_max_gross_zero_fee_overflows_bps_mul() {
+        let max = Uint128::from(u128::MAX);
+        let rate = Uint128::from(RATE_SCALE);
+        let err = withdraw_gross_ust1_to_vfdusd(max, rate, 0).unwrap_err();
+        assert!(
+            matches!(err, MathError::Overflow(_)),
+            "expected Overflow from fee BPS multiply, got {err:?}"
+        );
+    }
+
+    /// Near-max gross that still fits `gross * BPS_DENOM` at 1:1 / zero fee round-trips.
+    #[test]
+    fn edge_withdraw_near_max_gross_one_to_one_zero_fee() {
+        let gross = Uint128::from(u128::MAX / BPS_DENOM);
+        let rate = Uint128::from(RATE_SCALE);
+        let out = withdraw_gross_ust1_to_vfdusd(gross, rate, 0).unwrap();
+        assert_eq!(out, gross);
+    }
+
+    /// `amount * rate` fits `Uint256` but quotient exceeds `u128::MAX` → `TooLarge`.
+    #[test]
+    fn edge_forward_near_max_rate_too_large() {
+        let max = Uint128::from(u128::MAX);
+        let near_max_rate = Uint128::from(u128::MAX - 1);
+        let err = vfdusd_to_ust1_before_fee(max, near_max_rate).unwrap_err();
+        assert_eq!(err, MathError::TooLarge);
+    }
+
     proptest! {
         #[test]
         fn prop_fee_never_inverts(a in 0u128..1_000_000_000_000u128, fee in 0u16..10_000u16) {
@@ -161,6 +242,59 @@ mod tests {
             let rate = Uint128::from(r);
             let out = vfdusd_to_ust1_before_fee(amount, rate).unwrap();
             prop_assert!(out >= Uint128::zero());
+        }
+
+        /// Near-max magnitudes where `amount * rate / RATE_SCALE` still fits `Uint128`.
+        /// When `rate > RATE_SCALE`, UST1 out can exceed vFDUSD in (by design).
+        #[test]
+        fn prop_extreme_forward_ok(
+            amt in 1u128..=(u128::MAX / RATE_SCALE).max(1),
+            r in 1u128..=RATE_SCALE * 2,
+        ) {
+            let amount = Uint128::from(amt);
+            let rate = Uint128::from(r);
+            prop_assume!(
+                Uint256::from(amt)
+                    .checked_mul(Uint256::from(r))
+                    .is_ok()
+            );
+            let out = vfdusd_to_ust1_before_fee(amount, rate).unwrap();
+            if r <= RATE_SCALE {
+                prop_assert!(out <= amount);
+            } else {
+                prop_assert!(out >= amount);
+            }
+        }
+
+        /// When `after_fee * RATE_SCALE / rate` fits `Uint128`, reverse leg matches floor semantics; else `TooLarge`.
+        #[test]
+        fn prop_extreme_reverse_ok_or_too_large(
+            after in 1u128..=u128::MAX,
+            rate in 1u128..=RATE_SCALE,
+        ) {
+            let after_fee = Uint128::from(after);
+            let rate_u = Uint128::from(rate);
+            let product = Uint256::from(after)
+                .checked_mul(Uint256::from(RATE_SCALE))
+                .expect("after * RATE_SCALE fits Uint256 for u128 inputs");
+            let quotient = product / Uint256::from(rate);
+            match TryInto::<Uint128>::try_into(quotient) {
+                Ok(expected) => {
+                    let out = ust1_after_fee_to_vfdusd(after_fee, rate_u).unwrap();
+                    prop_assert_eq!(out, expected);
+                }
+                Err(_) => {
+                    let err = ust1_after_fee_to_vfdusd(after_fee, rate_u).unwrap_err();
+                    prop_assert_eq!(err, MathError::TooLarge);
+                }
+            }
+        }
+
+        /// Zero rate always yields `DivisionByZero` (never Ok).
+        #[test]
+        fn prop_reverse_zero_rate_always_err(after in 0u128..=u128::MAX) {
+            let err = ust1_after_fee_to_vfdusd(Uint128::from(after), Uint128::zero()).unwrap_err();
+            prop_assert_eq!(err, MathError::DivisionByZero);
         }
     }
 }

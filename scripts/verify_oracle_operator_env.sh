@@ -37,4 +37,20 @@ if [[ "${rpc_count:-0}" -lt 2 ]]; then
   exit 1
 fi
 
+# Optional hardening knobs (issue #25) — not required; printed when set for operator visibility.
+optional_vars=(
+  BSC_RPC_TIMEOUT_SECS
+  TICK_TIMEOUT_SECS
+  TERRA_GAS_PRICE
+  TERRA_GAS_PRICE_ULUNA
+  HEALTHZ_BIND
+  ORACLE_MAX_SILENCE_SECS
+  POLL_INTERVAL_SECS
+)
+for v in "${optional_vars[@]}"; do
+  if [[ -n "${!v:-}" ]]; then
+    echo "verify_oracle_operator_env: optional $v=${!v}"
+  fi
+done
+
 echo "verify_oracle_operator_env: required oracle operator variables are set (count BSC_RPC_URLS ok)."
