@@ -933,7 +933,10 @@ fn oracle_paused_blocks_deposit_and_withdraw_while_rate_fresh() {
         )
         .unwrap_err();
     assert!(
-        dep_err.root_cause().to_string().contains("oracle is paused"),
+        dep_err
+            .root_cause()
+            .to_string()
+            .contains("oracle is paused"),
         "deposit unexpected: {dep_err}"
     );
 
@@ -1108,9 +1111,7 @@ fn window_paused_still_blocks_when_oracle_unpaused() {
 #[test]
 fn oracle_set_paused_governance_only() {
     let TestEnv {
-        mut app,
-        oracle,
-        ..
+        mut app, oracle, ..
     } = setup();
 
     let stranger = Addr::unchecked("stranger");
@@ -1417,7 +1418,9 @@ fn instantiate_rejects_decimal_inversion() {
         .instantiate_contract(
             treasury_id,
             owner.clone(),
-            &stub_treasury::InstantiateMsg { reject_pulls: false },
+            &stub_treasury::InstantiateMsg {
+                reject_pulls: false,
+            },
             &[],
             "treasury",
             None,
@@ -1614,7 +1617,10 @@ fn rolling_window_resets_after_86400_sec() {
         .unwrap();
     assert_eq!(after_reset.rolling_window_start_sec, window_start + 86_400);
     // Window reset: volume reflects only the second deposit, not cumulative.
-    assert_eq!(after_reset.rolling_volume_ust1, after_first.rolling_volume_ust1);
+    assert_eq!(
+        after_reset.rolling_volume_ust1,
+        after_first.rolling_volume_ust1
+    );
 }
 
 #[test]

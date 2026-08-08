@@ -54,17 +54,11 @@ Pulls are **fail-closed** without `limit_24h` (ustr-cmm#7). Align quota with win
 2. **INV-WITHDRAW-002**: Response messages are ordered **Burn UST1 → InstantWithdrawCw20**; same tx; either failure reverts (no partial burn).
 3. **INV-SCHEMA-001**: Window InstantWithdrawCw20 JSON is byte-compatible with pinned ustr-cmm treasury `ExecuteMsg` (golden + `treasury_schema` + real treasury multitest). Stubs keep `cw_serde` / `deny_unknown_fields` — never loosen for “forward compat”.
 4. **Deposit unchanged**: vFDUSD `Transfer` → `cmm_treasury` after mint.
-5. **Guards preserved**: oracle usability (`INV-ORACLE-PAUSE-001` then freshness), fee math (`INV-SWAP-*`), per-tx / rolling limits (`INV-LIMIT-001`), window pause, `min_vfdusd_out`. Prefer keep treasury balance check → `InsufficientVfdusd`. See [`oracle-circuit-breaker`](../oracle-circuit-breaker/SKILL.md).
+5. **Guards preserved**: oracle usability (`INV-ORACLE-PAUSE-001` then freshness), fee math (`INV-SWAP-*` including **INV-SWAP-003/004** zero-output rejects — see [audit-hardening-bundle](../audit-hardening-bundle/SKILL.md) / [#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)), per-tx / rolling limits (`INV-LIMIT-001`), window pause, `min_vfdusd_out`. Prefer keep treasury balance check → `InsufficientVfdusd`. See [`oracle-circuit-breaker`](../oracle-circuit-breaker/SKILL.md).
 6. **Recipient**: cw20 Send `sender` only (not attacker-controlled hook field).
 7. **`cmm_treasury` instantiate-only** unless a separate issue adds `SetTreasury`.
 8. **No public pull entry** on the window — only via UST1 `Receive` withdraw hook.
 9. Window limits are primary UX caps; treasury `limit_24h` is a hard ceiling (defense in depth). Do not assume treasury caps replace window limits.
-3. **Deposit unchanged**: vFDUSD `Transfer` → `cmm_treasury` after mint.
-4. **Guards preserved**: oracle usability (`INV-ORACLE-PAUSE-001` then freshness), fee math (`INV-SWAP-*` including **INV-SWAP-003/004** zero-output rejects — see [audit-hardening-bundle](../audit-hardening-bundle/SKILL.md) / [#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)), per-tx / rolling limits (`INV-LIMIT-001`), window pause, `min_vfdusd_out`. Prefer keep treasury balance check → `InsufficientVfdusd`. See [`oracle-circuit-breaker`](../oracle-circuit-breaker/SKILL.md).
-5. **Recipient**: cw20 Send `sender` only (not attacker-controlled hook field).
-6. **`cmm_treasury` instantiate-only** unless a separate issue adds `SetTreasury`.
-7. **No public pull entry** on the window — only via UST1 `Receive` withdraw hook.
-8. Window limits are primary UX caps; treasury `limit_24h` is a hard ceiling (defense in depth). Do not assume treasury caps replace window limits.
 
 ## Code map
 

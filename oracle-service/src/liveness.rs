@@ -61,10 +61,10 @@ impl Default for LivenessTracker {
 }
 
 /// Recover from a poisoned liveness mutex instead of panicking (L-9).
-pub fn lock_liveness(
-    mutex: &Mutex<LivenessTracker>,
-) -> std::sync::MutexGuard<'_, LivenessTracker> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+pub fn lock_liveness(mutex: &Mutex<LivenessTracker>) -> std::sync::MutexGuard<'_, LivenessTracker> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Convenience for `Arc<Mutex<LivenessTracker>>` call sites.
