@@ -1244,6 +1244,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "common"
+version = "0.2.1"
+source = "git+https://gitlab.com/PlasticDigits2/ustr-cmm.git?rev=e6c4b7cf33f2f56d21c0e9fb2828efe87f032ded#e6c4b7cf33f2f56d21c0e9fb2828efe87f032ded"
+dependencies = [
+ "cosmwasm-schema",
+ "cosmwasm-std",
+ "cw20",
+ "schemars",
+ "serde",
+]
+
+[[package]]
 name = "const-hex"
 version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4520,6 +4532,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "treasury"
+version = "0.2.1"
+source = "git+https://gitlab.com/PlasticDigits2/ustr-cmm.git?rev=e6c4b7cf33f2f56d21c0e9fb2828efe87f032ded#e6c4b7cf33f2f56d21c0e9fb2828efe87f032ded"
+dependencies = [
+ "common",
+ "cosmwasm-schema",
+ "cosmwasm-std",
+ "cw-storage-plus",
+ "cw2",
+ "cw20",
+ "hex",
+ "schemars",
+ "serde",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4646,6 +4676,8 @@ dependencies = [
  "cw20-mintable",
  "proptest",
  "serde",
+ "serde_json",
+ "treasury",
  "ust1-common",
  "ust1-oracle",
  "ust1-window",
@@ -4710,7 +4742,9 @@ dependencies = [
  "cw20-mintable",
  "schemars",
  "serde",
+ "serde_json",
  "thiserror 1.0.69",
+ "treasury",
  "ust1-cmm",
  "ust1-common",
  "ust1-oracle",

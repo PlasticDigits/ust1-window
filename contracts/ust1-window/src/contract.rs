@@ -312,12 +312,8 @@ fn withdraw(
         funds: vec![],
     };
 
-    let pull_v = treasury::instant_withdraw_cw20_msg(
-        &cfg.cmm_treasury,
-        &user,
-        &cfg.vfdusd_token,
-        v_out,
-    )?;
+    let pull_v =
+        treasury::instant_withdraw_cw20_msg(&cfg.cmm_treasury, &user, &cfg.vfdusd_token, v_out)?;
 
     let (fee_chain_tax_bps, fee_cmm_protocol_bps) =
         ust1_common::fee_split::chain_tax_and_cmm_protocol(cfg.fee_bps);

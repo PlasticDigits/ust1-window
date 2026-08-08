@@ -3,8 +3,8 @@
 //! `InstantWithdrawCw20` (no CW20 allowance).
 
 use cosmwasm_std::{
-    to_json_binary, Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response as CwResponse,
-    StdResult, Addr, Timestamp, Uint128, WasmMsg,
+    to_json_binary, Addr, Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response as CwResponse,
+    StdResult, Timestamp, Uint128, WasmMsg,
 };
 use cw20::{Cw20ExecuteMsg, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
@@ -22,6 +22,9 @@ use ust1_oracle::msg as oracle_msg;
 
 /// Minimal treasury stub: holds CW20 and honors `InstantWithdrawCw20` with a Transfer.
 /// Optional reject mode simulates unregistered / paused treasury for atomicity tests.
+///
+/// Uses `#[cw_serde]` (`deny_unknown_fields`) so misspelled/extra fields fail like
+/// production treasury decode. Do not loosen this (see INV-SCHEMA-001 / issue #21).
 mod stub_treasury {
     use super::*;
 
@@ -68,7 +71,11 @@ mod stub_treasury {
                 token,
                 amount,
             } => {
-                let reject = deps.storage.get(b"reject").map(|v| v[0] != 0).unwrap_or(false);
+                let reject = deps
+                    .storage
+                    .get(b"reject")
+                    .map(|v| v[0] != 0)
+                    .unwrap_or(false);
                 if reject {
                     return Err(cosmwasm_std::StdError::generic_err(
                         "stub treasury: InstantWithdrawCw20 rejected (unregistered or paused)",
@@ -380,6 +387,19 @@ fn withdraw_msg_is_instant_withdraw_cw20_shape() {
         s.contains("instant_withdraw_cw20"),
         "unexpected wire json: {s}"
     );
+    assert_eq!(
+        s,
+        r#"{"instant_withdraw_cw20":{"recipient":"terra1user","token":"terra1vfdusd","amount":"42"}}"#
+    );
+}
+
+#[test]
+fn stub_treasury_rejects_unknown_instant_withdraw_fields() {
+    use cosmwasm_std::from_json;
+    let raw = br#"{"instant_withdraw_cw20":{"recipient":"u","token":"t","amount":"1","memo":"x"}}"#;
+    assert!(from_json::<stub_treasury::ExecuteMsg>(raw).is_err());
+    let ok = br#"{"instant_withdraw_cw20":{"recipient":"u","token":"t","amount":"1"}}"#;
+    assert!(from_json::<stub_treasury::ExecuteMsg>(ok).is_ok());
 }
 
 #[test]
@@ -777,7 +797,11 @@ fn withdraw_treasury_reject_is_atomic_no_ust1_burn() {
             .to_string()
             .to_lowercase()
             .contains("rejected")
-            || err.root_cause().to_string().to_lowercase().contains("unregistered"),
+            || err
+                .root_cause()
+                .to_string()
+                .to_lowercase()
+                .contains("unregistered"),
         "unexpected: {err}"
     );
 
@@ -1189,13 +1213,8 @@ fn migrate_preserves_config() {
         .query_wasm_smart(&window, &QueryMsg::Config {})
         .unwrap();
 
-    app.migrate_contract(
-        owner,
-        window.clone(),
-        &MigrateMsg {},
-        window_code_id,
-    )
-    .unwrap();
+    app.migrate_contract(owner, window.clone(), &MigrateMsg {}, window_code_id)
+        .unwrap();
 
     let after: ConfigResponse = app
         .wrap()

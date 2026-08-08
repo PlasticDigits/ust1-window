@@ -7,6 +7,12 @@ mod stub_treasury;
 mod integration_tests;
 
 #[cfg(test)]
+mod treasury_schema;
+
+#[cfg(test)]
+mod real_treasury_integration;
+
+#[cfg(test)]
 mod oracle_policy_tests;
 
 #[cfg(test)]
