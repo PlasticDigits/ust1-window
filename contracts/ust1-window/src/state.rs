@@ -12,12 +12,17 @@ fn default_max_oracle_age_sec() -> u64 {
 /// # Invariants
 ///
 /// - **INV-LIMIT-001**: UST1 notional per swap and per rolling window must respect governance caps.
+/// - **INV-WITHDRAW-001**: Withdraws pull vFDUSD via treasury `InstantWithdrawCw20` (registered
+///   spender); no CW20 allowance / `TransferFrom` on the happy path.
+/// - **INV-WITHDRAW-002**: UST1 `Burn` and treasury `InstantWithdrawCw20` are emitted in the same
+///   response (burn first); either failure reverts the tx.
 #[cw_serde]
 pub struct Config {
     pub governance: Addr,
     pub oracle: Addr,
     pub vfdusd_token: Addr,
-    /// Holds vFDUSD inventory; deposits forward here; withdraws use `TransferFrom` (treasury must allow the window).
+    /// Holds vFDUSD inventory. Deposits `Transfer` here; withdraws call treasury
+    /// `InstantWithdrawCw20` (window must be registered via treasury gov `SetCw20Spender`).
     pub cmm_treasury: Addr,
     pub ust1_token: Addr,
     /// UST1-leg swap fee in basis points; updatable via governance (`SetFeeBps`).

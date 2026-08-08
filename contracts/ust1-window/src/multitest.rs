@@ -1,15 +1,91 @@
-//! cw-multi-test coverage for **INV-LIMIT-001**, **INV-SWAP-001**, pause/ACL, and failure paths.
+//! cw-multi-test coverage for **INV-LIMIT-001**, **INV-SWAP-001**, **INV-WITHDRAW-001/002**,
+//! pause/ACL, and failure paths. Uses a stub treasury that accepts `InstantWithdrawCw20`
+//! (no CW20 allowance).
 
-use cosmwasm_std::{to_json_binary, Addr, Empty, Timestamp, Uint128};
-use cw20::{Cw20ExecuteMsg, Expiration, MinterResponse};
+use cosmwasm_std::{
+    to_json_binary, Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response as CwResponse,
+    StdResult, Addr, Timestamp, Uint128, WasmMsg,
+};
+use cw20::{Cw20ExecuteMsg, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
 
-use crate::msg::{ConfigResponse, Cw20HookMsg, ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::msg::{ConfigResponse, Cw20HookMsg, ExecuteMsg, InstantiateMsg, MigrateMsg, QueryMsg};
+use crate::treasury::TreasuryExecuteMsg;
 use ust1_common::{
     DEFAULT_FEE_BPS, DEFAULT_MAX_ORACLE_AGE_SECS, DEFAULT_PER_TX_UST1_LIMIT,
     DEFAULT_ROLLING_24H_UST1_LIMIT, MIN_ORACLE_UPDATE_INTERVAL_SECS, RATE_SCALE,
 };
 use ust1_oracle::msg as oracle_msg;
+
+/// Minimal treasury stub: holds CW20 and honors `InstantWithdrawCw20` with a Transfer.
+/// Optional reject mode simulates unregistered / paused treasury for atomicity tests.
+mod stub_treasury {
+    use super::*;
+
+    #[cosmwasm_schema::cw_serde]
+    pub struct InstantiateMsg {
+        /// When true, InstantWithdrawCw20 always fails (spender not registered / paused).
+        pub reject_pulls: bool,
+    }
+
+    #[cosmwasm_schema::cw_serde]
+    pub enum ExecuteMsg {
+        InstantWithdrawCw20 {
+            recipient: String,
+            token: String,
+            amount: Uint128,
+        },
+        /// Test-only: toggle reject mode after instantiate.
+        SetRejectPulls { reject: bool },
+    }
+
+    pub fn instantiate(
+        deps: DepsMut,
+        _env: Env,
+        _info: MessageInfo,
+        msg: InstantiateMsg,
+    ) -> StdResult<CwResponse> {
+        deps.storage.set(b"reject", &[u8::from(msg.reject_pulls)]);
+        Ok(CwResponse::new().add_attribute("action", "stub_treasury_instantiate"))
+    }
+
+    pub fn execute(
+        deps: DepsMut,
+        _env: Env,
+        _info: MessageInfo,
+        msg: ExecuteMsg,
+    ) -> StdResult<CwResponse> {
+        match msg {
+            ExecuteMsg::SetRejectPulls { reject } => {
+                deps.storage.set(b"reject", &[u8::from(reject)]);
+                Ok(CwResponse::new().add_attribute("action", "set_reject_pulls"))
+            }
+            ExecuteMsg::InstantWithdrawCw20 {
+                recipient,
+                token,
+                amount,
+            } => {
+                let reject = deps.storage.get(b"reject").map(|v| v[0] != 0).unwrap_or(false);
+                if reject {
+                    return Err(cosmwasm_std::StdError::generic_err(
+                        "stub treasury: InstantWithdrawCw20 rejected (unregistered or paused)",
+                    ));
+                }
+                Ok(CwResponse::new()
+                    .add_message(WasmMsg::Execute {
+                        contract_addr: token,
+                        msg: to_json_binary(&Cw20ExecuteMsg::Transfer { recipient, amount })?,
+                        funds: vec![],
+                    })
+                    .add_attribute("action", "instant_withdraw_cw20"))
+            }
+        }
+    }
+
+    pub fn query(_deps: Deps, _env: Env, _msg: Empty) -> StdResult<Binary> {
+        to_json_binary(&Empty {})
+    }
+}
 
 fn oracle_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
     let c = ContractWrapper::new(
@@ -40,30 +116,40 @@ fn cw20_mintable_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
     Box::new(c)
 }
 
-struct Env {
+fn stub_treasury_contract() -> Box<dyn cw_multi_test::Contract<Empty>> {
+    let c = ContractWrapper::new(
+        stub_treasury::execute,
+        stub_treasury::instantiate,
+        stub_treasury::query,
+    );
+    Box::new(c)
+}
+
+struct TestEnv {
     app: App,
     owner: Addr,
     user: Addr,
-    _treasury: Addr,
+    treasury: Addr,
     vfdusd: Addr,
     ust1: Addr,
     window: Addr,
+    window_code_id: u64,
 }
 
-fn setup() -> Env {
-    setup_with_treasury_allowance(true)
+fn setup() -> TestEnv {
+    setup_with_treasury(false)
 }
 
-fn setup_with_treasury_allowance(grant_allowance: bool) -> Env {
+fn setup_with_treasury(reject_pulls: bool) -> TestEnv {
     let mut app = App::default();
     let owner = Addr::unchecked("owner");
     let bot = Addr::unchecked("bot");
     let user = Addr::unchecked("user");
-    let treasury = Addr::unchecked("treasury");
 
     let oracle_id = app.store_code(oracle_contract());
     let window_id = app.store_code(window_contract());
     let cw20_id = app.store_code(cw20_mintable_contract());
+    let treasury_id = app.store_code(stub_treasury_contract());
 
     let oracle = app
         .instantiate_contract(
@@ -122,6 +208,17 @@ fn setup_with_treasury_allowance(grant_allowance: bool) -> Env {
         )
         .unwrap();
 
+    let treasury = app
+        .instantiate_contract(
+            treasury_id,
+            owner.clone(),
+            &stub_treasury::InstantiateMsg { reject_pulls },
+            &[],
+            "treasury",
+            None,
+        )
+        .unwrap();
+
     let window = app
         .instantiate_contract(
             window_id,
@@ -139,7 +236,7 @@ fn setup_with_treasury_allowance(grant_allowance: bool) -> Env {
             },
             &[],
             "window",
-            None,
+            Some(owner.to_string()),
         )
         .unwrap();
 
@@ -165,39 +262,128 @@ fn setup_with_treasury_allowance(grant_allowance: bool) -> Env {
     )
     .unwrap();
 
-    if grant_allowance {
-        app.execute_contract(
-            treasury.clone(),
-            vfdusd.clone(),
-            &cw20_mintable::msg::ExecuteMsg::IncreaseAllowance {
-                spender: window.to_string(),
-                amount: Uint128::MAX,
-                expires: Some(Expiration::Never {}),
-            },
-            &[],
-        )
-        .unwrap();
-    }
-
-    Env {
+    TestEnv {
         app,
         owner,
         user,
-        _treasury: treasury,
+        treasury,
         vfdusd,
         ust1,
         window,
+        window_code_id: window_id,
     }
+}
+
+fn cw20_balance(app: &App, token: &Addr, address: &Addr) -> Uint128 {
+    let bal: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            token,
+            &cw20::Cw20QueryMsg::Balance {
+                address: address.to_string(),
+            },
+        )
+        .unwrap();
+    bal.balance
+}
+
+#[test]
+fn deposit_and_withdraw_via_instant_withdraw_cw20() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        treasury,
+        vfdusd,
+        ust1,
+        window,
+        ..
+    } = setup();
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(10_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let dep = Uint128::from(1_000_000u128);
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: dep,
+            msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(cw20_balance(&app, &vfdusd, &treasury), dep);
+    // No CW20 allowance required for redeem.
+    let allowance: cw20::AllowanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            &vfdusd,
+            &cw20::Cw20QueryMsg::Allowance {
+                owner: treasury.to_string(),
+                spender: window.to_string(),
+            },
+        )
+        .unwrap();
+    assert_eq!(allowance.allowance, Uint128::zero());
+
+    let ust1_bal = cw20_balance(&app, &ust1, &user);
+    assert!(ust1_bal > Uint128::zero());
+
+    app.execute_contract(
+        user.clone(),
+        ust1.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: ust1_bal,
+            msg: to_json_binary(&Cw20HookMsg::Withdraw {
+                min_vfdusd_out: Uint128::zero(),
+            })
+            .unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(cw20_balance(&app, &ust1, &user), Uint128::zero());
+    assert!(cw20_balance(&app, &vfdusd, &user) > Uint128::zero());
+    assert!(cw20_balance(&app, &vfdusd, &treasury) < dep);
+}
+
+#[test]
+fn withdraw_msg_is_instant_withdraw_cw20_shape() {
+    // Snake_case wire name must match ustr-cmm treasury ExecuteMsg.
+    let msg = TreasuryExecuteMsg::InstantWithdrawCw20 {
+        recipient: "terra1user".into(),
+        token: "terra1vfdusd".into(),
+        amount: Uint128::from(42u128),
+    };
+    let bin = to_json_binary(&msg).unwrap();
+    let s = String::from_utf8(bin.to_vec()).unwrap();
+    assert!(
+        s.contains("instant_withdraw_cw20"),
+        "unexpected wire json: {s}"
+    );
 }
 
 #[test]
 fn inv_limit_001_per_tx_exceeded() {
-    let Env {
+    let TestEnv {
         mut app,
         owner,
         user,
         vfdusd,
-        ust1: _ust1,
         window,
         ..
     } = setup();
@@ -244,7 +430,7 @@ fn inv_limit_001_per_tx_exceeded() {
 
 #[test]
 fn inv_limit_001_rolling_24h_exceeded() {
-    let Env {
+    let TestEnv {
         mut app,
         owner,
         user,
@@ -308,7 +494,7 @@ fn inv_limit_001_rolling_24h_exceeded() {
 
 #[test]
 fn paused_blocks_cw20_flow() {
-    let Env {
+    let TestEnv {
         mut app,
         owner,
         user,
@@ -356,7 +542,7 @@ fn paused_blocks_cw20_flow() {
 
 #[test]
 fn invalid_cw20_sender_rejected() {
-    let Env {
+    let TestEnv {
         mut app,
         owner,
         user,
@@ -417,7 +603,7 @@ fn invalid_cw20_sender_rejected() {
 
 #[test]
 fn withdraw_below_min_vfdusd_out_rejected() {
-    let Env {
+    let TestEnv {
         mut app,
         owner,
         user,
@@ -450,15 +636,7 @@ fn withdraw_below_min_vfdusd_out_rejected() {
     )
     .unwrap();
 
-    let bal: cw20::BalanceResponse = app
-        .wrap()
-        .query_wasm_smart(
-            ust1.clone(),
-            &cw20::Cw20QueryMsg::Balance {
-                address: user.to_string(),
-            },
-        )
-        .unwrap();
+    let bal = cw20_balance(&app, &ust1, &user);
 
     let err = app
         .execute_contract(
@@ -466,7 +644,7 @@ fn withdraw_below_min_vfdusd_out_rejected() {
             ust1,
             &Cw20ExecuteMsg::Send {
                 contract: window.to_string(),
-                amount: bal.balance,
+                amount: bal,
                 msg: to_json_binary(&Cw20HookMsg::Withdraw {
                     min_vfdusd_out: Uint128::MAX,
                 })
@@ -482,8 +660,8 @@ fn withdraw_below_min_vfdusd_out_rejected() {
 }
 
 #[test]
-fn withdraw_insufficient_vfdusd_in_window() {
-    let Env {
+fn withdraw_insufficient_vfdusd_in_treasury() {
+    let TestEnv {
         mut app,
         owner,
         user,
@@ -524,21 +702,87 @@ fn withdraw_insufficient_vfdusd_in_window() {
         "unexpected: {err}"
     );
 
-    let vb: cw20::BalanceResponse = app
-        .wrap()
-        .query_wasm_smart(
-            vfdusd,
-            &cw20::Cw20QueryMsg::Balance {
-                address: user.to_string(),
+    assert_eq!(cw20_balance(&app, &vfdusd, &user), Uint128::zero());
+}
+
+#[test]
+fn withdraw_treasury_reject_is_atomic_no_ust1_burn() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        treasury,
+        vfdusd,
+        ust1,
+        window,
+        ..
+    } = setup_with_treasury(false);
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(10_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: Uint128::from(1_000_000u128),
+            msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let ust1_before = cw20_balance(&app, &ust1, &user);
+    let treasury_before = cw20_balance(&app, &vfdusd, &treasury);
+
+    app.execute_contract(
+        owner.clone(),
+        treasury.clone(),
+        &stub_treasury::ExecuteMsg::SetRejectPulls { reject: true },
+        &[],
+    )
+    .unwrap();
+
+    let err = app
+        .execute_contract(
+            user.clone(),
+            ust1.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: ust1_before,
+                msg: to_json_binary(&Cw20HookMsg::Withdraw {
+                    min_vfdusd_out: Uint128::zero(),
+                })
+                .unwrap(),
             },
+            &[],
         )
-        .unwrap();
-    assert_eq!(vb.balance, Uint128::zero());
+        .unwrap_err();
+    assert!(
+        err.root_cause()
+            .to_string()
+            .to_lowercase()
+            .contains("rejected")
+            || err.root_cause().to_string().to_lowercase().contains("unregistered"),
+        "unexpected: {err}"
+    );
+
+    assert_eq!(cw20_balance(&app, &ust1, &user), ust1_before);
+    assert_eq!(cw20_balance(&app, &vfdusd, &treasury), treasury_before);
 }
 
 #[test]
 fn stale_oracle_blocks_deposit() {
-    let Env {
+    let TestEnv {
         mut app,
         owner,
         user,
@@ -584,7 +828,7 @@ fn stale_oracle_blocks_deposit() {
 
 #[test]
 fn set_max_oracle_age_governance_only() {
-    let Env {
+    let TestEnv {
         mut app,
         owner,
         window,
@@ -626,7 +870,7 @@ fn set_max_oracle_age_governance_only() {
 
 #[test]
 fn set_max_oracle_age_below_oracle_throttle_rejected() {
-    let Env {
+    let TestEnv {
         mut app,
         owner,
         window,
@@ -650,70 +894,37 @@ fn set_max_oracle_age_below_oracle_throttle_rejected() {
 }
 
 #[test]
-fn withdraw_rejected_without_treasury_allowance() {
-    let Env {
+fn migrate_preserves_config() {
+    let TestEnv {
         mut app,
         owner,
-        user,
+        window,
+        window_code_id,
+        treasury,
         vfdusd,
         ust1,
-        window,
         ..
-    } = setup_with_treasury_allowance(false);
+    } = setup();
 
-    app.execute_contract(
-        owner.clone(),
-        vfdusd.clone(),
-        &cw20_mintable::msg::ExecuteMsg::Mint {
-            recipient: user.to_string(),
-            amount: Uint128::from(10_000_000u128),
-        },
-        &[],
-    )
-    .unwrap();
-
-    app.execute_contract(
-        user.clone(),
-        vfdusd.clone(),
-        &Cw20ExecuteMsg::Send {
-            contract: window.to_string(),
-            amount: Uint128::from(1_000_000u128),
-            msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
-        },
-        &[],
-    )
-    .unwrap();
-
-    let bal: cw20::BalanceResponse = app
+    let before: ConfigResponse = app
         .wrap()
-        .query_wasm_smart(
-            ust1.clone(),
-            &cw20::Cw20QueryMsg::Balance {
-                address: user.to_string(),
-            },
-        )
+        .query_wasm_smart(&window, &QueryMsg::Config {})
         .unwrap();
 
-    let err = app
-        .execute_contract(
-            user,
-            ust1,
-            &Cw20ExecuteMsg::Send {
-                contract: window.to_string(),
-                amount: bal.balance,
-                msg: to_json_binary(&Cw20HookMsg::Withdraw {
-                    min_vfdusd_out: Uint128::zero(),
-                })
-                .unwrap(),
-            },
-            &[],
-        )
-        .unwrap_err();
-    assert!(
-        err.root_cause()
-            .to_string()
-            .to_lowercase()
-            .contains("allowance"),
-        "unexpected: {err}"
-    );
+    app.migrate_contract(
+        owner,
+        window.clone(),
+        &MigrateMsg {},
+        window_code_id,
+    )
+    .unwrap();
+
+    let after: ConfigResponse = app
+        .wrap()
+        .query_wasm_smart(&window, &QueryMsg::Config {})
+        .unwrap();
+    assert_eq!(before, after);
+    assert_eq!(after.cmm_treasury, treasury.to_string());
+    assert_eq!(after.vfdusd_token, vfdusd.to_string());
+    assert_eq!(after.ust1_token, ust1.to_string());
 }

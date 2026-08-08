@@ -76,7 +76,7 @@ Define once and reuse:
 | **EVM admin key** | BSC `TokenRegistry` owner calls (`registerToken`, destinations, incoming mappings) |
 | **Governance (multisig)** | `ust1-*` governance messages; optional contract admin |
 | **Oracle operator** | Sole caller of `ust1-oracle` `UpdateRate`; seed in `TERRA_MNEMONIC` for the service |
-| **CMM treasury** | ustr-cmm **Treasury contract** (not an EOA): holds inventory; **cannot** emit CW20 `IncreaseAllowance` (see Phase 5) |
+| **CMM treasury** | ustr-cmm **Treasury contract** (not an EOA): holds inventory; window redeem via `InstantWithdrawCw20` + `SetCw20Spender` (see Phase 5 / [#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20)) |
 
 ### Known mainnet operator addresses ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19))
 
@@ -165,7 +165,7 @@ Venus vFDUSD on BSC is **LockUnlock** (`registerToken` type **`0`**). Terra CW20
 - [x] Instantiate **`ust1-oracle`** — `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` (code **11549**).
 - [x] Instantiate **`ust1-window`** — `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` (code **11550**; approved fee/limits; default CMM treasury).
 - [ ] **UST1 minters:** from governance, execute cw20-mintable **`add_minter`** for **`ust1-window`** (see integration tests in `ust1-integration-tests`).
-- [ ] **Treasury / withdraw inventory:** default `cmm_treasury` is the ustr-cmm Treasury **contract** — it has **no** CW20 `IncreaseAllowance` path; decide custody model before withdraw smoke (see Phase 5).
+- [ ] **Treasury / withdraw inventory (Option 3):** migrate window to InstantWithdrawCw20 code; treasury gov `SetCw20Spender` (+ `limit_24h`) for vFDUSD → window (see Phase 5). Depends on [ustr-cmm#6](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/6) / [#7](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/7) and [ust1-window#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20).
 - [ ] **Governance handoff:** if required, run `ProposeGovernance` / `AcceptGovernance` on oracle and window.
 - [ ] **First oracle commit:** `oracle_operator` sends `UpdateRate` consistent with policy (service will continue updates).
 
@@ -409,25 +409,37 @@ terrad tx wasm execute "$TERRA_UST1" \
   --keyring-backend file --broadcast-mode sync -y
 ```
 
-### 2) Withdraw inventory / allowance (CMM treasury is a contract)
+### 2) Withdraw inventory — Option 3 (`InstantWithdrawCw20`)
 
 Default `cmm_treasury` is the **ustr-cmm Treasury** contract:
 
 `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2`
 
-It is **not** an EOA. Governance is `terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l`. On-chain execute surface supports CW20 **Receive**, timelocked **ProposeWithdraw** / **ExecuteWithdraw** (`Transfer`), whitelist, and native **InstantWithdraw** for registered wrappers — **not** CW20 `IncreaseAllowance`.
+Governance: `terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l`.
 
-`ust1-window` withdraws via **`TransferFrom`** on vFDUSD with `owner = cmm_treasury`, so the owner must have approved the window. That approval **cannot** be submitted as `--from` the treasury address with a keyring key.
+**Chosen model ([#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20)):** window redeem calls treasury **`InstantWithdrawCw20`** (registered spender). Deposits still `Transfer` vFDUSD to treasury. **Do not** use EOA `increase_allowance` / CW20 `TransferFrom` against this treasury.
 
-**Policy target (when allowance is possible):** 10,000 vFDUSD = `10000000000` (6 decimals).
+Treasury half: [ustr-cmm#6](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/6) (spender registry) + [#7](https://gitlab.com/PlasticDigits2/ustr-cmm/-/issues/7) (24h pull limit; **fail-closed** until limit is set). Agent skill: [`skills/window-instant-withdraw-cw20`](../skills/window-instant-withdraw-cw20/SKILL.md); treasury skill: ustr-cmm `skills/treasury-cw20-instant-withdraw`.
 
-**Viable paths (pick one before withdraw smoke):**
+**Ops sequence (after window wasm with InstantWithdrawCw20 is stored):**
 
-1. **Custody EOA / allowance-capable vault as `cmm_treasury`** — re-instantiate window with that address (config field is instantiate-only; no `SetTreasury`). Fund it with vFDUSD; that account runs `increase_allowance` for the window.
-2. **Extend ustr-cmm Treasury** (migrate) with a governance-gated CW20 allowance / pull exec the window can rely on.
-3. **Change `ust1-window`** to withdraw through a treasury API (e.g. registered spender / InstantWithdraw-style CW20) instead of `TransferFrom`.
+1. Confirm treasury bytecode exposes `InstantWithdrawCw20` / `SetCw20Spender` (migrate treasury in place if still on pre-#6 code).
+2. Prefer **migrate** existing window `terra1zxwp…` (admin = governance) to the new code id so the address stays stable. `MigrateMsg` is empty; config (treasury, oracle, tokens, limits) is preserved.
+3. Treasury gov registers the window **with a 24h limit** (pulls fail without a limit):
 
-Do **not** run the EOA-style `increase_allowance` against the default treasury address — it will not work.
+```bash
+# Example: align with window rolling inventory policy (~10_000 vFDUSD = 10000000000 base units)
+terrad tx wasm execute "$CMM_TREASURY" \
+  '{"set_cw20_spender":{"token":"'"$TERRA_VFDUSD"'","spender":"'"$WINDOW_ADDR"'","limit_24h":"10000000000"}}' \
+  --from "$GOVERNANCE_KEY" \
+  --chain-id columbus-5 --node "$TERRA_RPC" \
+  --gas auto --gas-adjustment 1.5 --fees 10000000uluna \
+  --keyring-backend file --broadcast-mode sync -y
+```
+
+4. Query spenders / limit, then run a **small** UST1→vFDUSD withdraw smoke. Finder should show treasury CW20 **`Transfer`** (not `TransferFrom`). `allowance(treasury, window)` remains unused (0).
+
+**Policy note:** Window per-tx / 24h UST1 limits remain the user-facing product caps; treasury `limit_24h` is a hard ceiling (defense in depth).
 
 ### 3) First oracle rate
 
@@ -510,7 +522,7 @@ Treat mainnet addresses as **recorded-at-deploy**: store code id, tx hashes, and
 | UST1 cw20 | live | 10184 | `terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72` | Minter = governance `terra1xsecn…`; decimals 6; tx `2A5970A8…3EAF` |
 | `ust1-oracle` | live | **11549** | `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` | Operator `terra1hm3ph0jevtkuc9efj9q3ld3ktk3g6la3ruhqna`; tx `EFA79773…355E` |
 | `ust1-window` | live | **11550** | `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` | fee_bps=100; per-tx 1000 / 24h 10000 UST1; tx `9F078327…224C` |
-| CMM treasury (ustr-cmm) | live | **10673** (per ustr-cmm README) | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | Contract, not EOA; no CW20 allowance exec; gov `terra1xsecn…` |
+| CMM treasury (ustr-cmm) | live | see ustr-cmm (migrate for #6/#7) | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | Contract; CW20 pulls via `InstantWithdrawCw20` + `SetCw20Spender`; gov `terra1xsecn…` |
 | Terra deployer (`cl8ydeploy`) | — | — | `terra1hu4zggf3f8yw6jw3rxrjxn2drwad675gq5k2lv` | Code **10184** creator |
 | Terra admin / gov / bridge admin (`cl8y2_admin`) | — | — | `terra1xsecn4snv94ezcez0z3vq8an9j4h4kxxcydp8l` | CW20 admin + UST1 minter + bridge admin |
 | BSC vFDUSD (Venus) | — | — | `0xC4eF4229FEc74Ccfe17B2bdeF7715fAC740BA0ba` | LockUnlock; 8 decimals; registered on TokenRegistry |
@@ -547,6 +559,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-08-08 | Window withdraw = treasury `InstantWithdrawCw20` (Option 3); Phase 5 ops = migrate window + `SetCw20Spender`/`limit_24h` ([issue #20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20); depends on ustr-cmm #6/#7). |
 | 2026-07-30 | Mainnet CW20s live: **vFDUSD** `terra1mnl9…svj3`, **UST1** `terra1f0eq…fy72` (code **10184**); registry + README updated ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-07-30 | Phase 2/3 operator runbook: code id **10184**, known deployer/gov/BSC addresses, Venus vFDUSD **LockUnlock** + Terra **mint_burn**, decimals Terra 6 / BSC 8 ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-07-30 | Window instantiate example + defaults: `fee_bps=100`, per-tx **1,000** / rolling 24h **10,000** UST1 ([issue #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |

@@ -4,7 +4,7 @@ Monorepo for Terra Classic **UST1** swap tooling against bridged Venus **vFDUSD*
 
 ## Mainnet status (`columbus-5`)
 
-Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). Post-deploy wiring (`add_minter`, treasury allowance, first `UpdateRate`, oracle service) still pending — full operator registry in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). Post-deploy wiring (`add_minter`, window migrate + treasury `SetCw20Spender` for InstantWithdrawCw20, first `UpdateRate`, oracle service) still pending — full operator registry in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Redeem path: [GitLab #20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20).
 
 ### Contracts & tokens
 
@@ -15,7 +15,7 @@ Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/Pla
 | **UST1** | `terra1f0eqgy9w7e5e7up97vjudqwx38tesf8ylx75x2lv3nwm0clry0pqmgfy72` | 10184 | Decimals **6**; minter = governance (window `add_minter` pending) |
 | **ust1-oracle** | `terra1fmht0t6svq3n24zx03nkfja0m40zhfyyxkdcvlrkl6u7gfe6aagq4gch8n` | **11549** | Operator `terra1hm3ph0jevtkuc9efj9q3ld3ktk3g6la3ruhqna`; initial rate `1e18` |
 | **ust1-window** | `terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2` | **11550** | `fee_bps=100`; per-tx **1000** / rolling 24h **10000** UST1; CMM treasury default |
-| CMM treasury (ustr-cmm) | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | — | **Contract** (not EOA); no CW20 `IncreaseAllowance` — withdraw custody TBD |
+| CMM treasury (ustr-cmm) | `terra16j5u6ey7a84g40sr3gd94nzg5w5fm45046k9s2347qhfpwm5fr6sem3lr2` | — | **Contract**; window redeem via `InstantWithdrawCw20` after gov `SetCw20Spender` ([#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20)) |
 | CL8Y Terra bridge | `terra18m02l2f43c2dagqnz3kfccpgz9pzzz5hk9l5mh5wvr6dcvv47zfqdfs7la` | — | vFDUSD minter; BSC↔Terra registered |
 
 ### Roles & BSC
@@ -36,7 +36,7 @@ Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/Pla
 | `smartcontracts-terraclassic/packages/ust1-common` | Fixed-point math, oracle policy (`INV-*` in source), shared with contracts + service |
 | `smartcontracts-terraclassic/packages/ust1-cmm` | CMM constants (e.g. mainnet treasury address); `ust1-window` depends on crate `ust1-cmm` via **Git** (see root `Cargo.toml`, `Cargo.lock`). Change this tree, then `cargo update -p ust1-cmm` and commit the lockfile. Optional later: dedicated [`ust1-cmm`](https://gitlab.com/PlasticDigits/ust1-cmm) repo. |
 | `contracts/ust1-oracle` | On-chain rate `R`, 4h min interval, UTC daily +2% cap, monotonic |
-| `contracts/ust1-window` | cw20 receive: vFDUSD→mint UST1 + forward vFDUSD to CMM treasury, UST1→burn + `TransferFrom` vFDUSD from treasury; governance-set fee on UST1 leg (`fee_bps`, default 1.0% with 50/50 chain-tax vs CMM accounting); treasury must `IncreaseAllowance` for the window on vFDUSD |
+| `contracts/ust1-window` | cw20 receive: vFDUSD→mint UST1 + forward vFDUSD to CMM treasury; UST1→burn + treasury `InstantWithdrawCw20` (registered spender; no CW20 allowance); governance-set fee on UST1 leg (`fee_bps`, default 1.0% with 50/50 chain-tax vs CMM accounting). Skill: [`skills/window-instant-withdraw-cw20`](skills/window-instant-withdraw-cw20/SKILL.md) |
 | `contracts/cmm-native-wrap` | Native `Wrap` + cw20 `Receive` unwrap: **uluna**↔wLUNC, **uusd**↔wUSTC only; governance `fee_bps` (default **1%** recommended per GitLab #17) with **50/50** chain-tax vs CMM attribution on events / `EffectiveWrap`; per-denom limits; **no** `ust1-oracle` (GitLab #16) |
 | `oracle-service` | Polls BSC `exchangeRateStored`, applies same policy as chain, broadcasts `UpdateRate` |
 | `scripts/` | Python 3 deploy helpers (no business logic) |
@@ -47,6 +47,7 @@ Tokens + oracle/window instantiate complete ([GitLab #19](https://gitlab.com/Pla
 - **INV-MATH-002** — `ust1-common/src/fee_split.rs` + `ust1-window` / `cmm-native-wrap` event attributes and `Effective*` queries (GitLab #17)
 - **INV-ORACLE-THROTTLE-001 / INV-ORACLE-DAILY-001 / INV-ORACLE-MONO-001** — `ust1-common/src/oracle_policy.rs` + `ust1-oracle`
 - **INV-LIMIT-001** — `ust1-window/src/state.rs`, enforced in `contract.rs`
+- **INV-WITHDRAW-001 / INV-WITHDRAW-002** — `ust1-window/src/state.rs` + `treasury.rs` / `contract.rs` (InstantWithdrawCw20; burn-then-pull atomicity) ([#20](https://gitlab.com/PlasticDigits/ust1-window/-/issues/20))
 - **INV-LIMIT-NATIVE-001** — `cmm-native-wrap/src/state.rs` / `limits.rs`, enforced in `wrap.rs` and `unwrap.rs`
 
 Operator checklist, BSC + Terra address registry, and mainnet/testnet deployment notes: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) ([GitLab #15](https://gitlab.com/PlasticDigits/ust1-window/-/issues/15)).
