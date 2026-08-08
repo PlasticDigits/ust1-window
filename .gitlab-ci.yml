@@ -16,7 +16,7 @@ variables:
 # Requires network to fetch the pinned git dep (same as local `cargo test`).
 rust:
   stage: test
-  image: rust:1.85-bookworm
+  image: rust:1.88-bookworm
   cache:
     key: cargo-${CI_COMMIT_REF_SLUG}
     paths:
