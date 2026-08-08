@@ -28,6 +28,34 @@ pub const TERRA_DERIVATION_PATH: &str = "m/44'/330'/0'/0/0";
 pub const DEFAULT_GAS_LIMIT: u64 = 500_000u64;
 pub const DEFAULT_GAS_PRICE: f64 = 0.015_f64;
 
+/// Decode LCD `/cosmwasm/wasm/v1/contract/.../smart/...` `data` field.
+///
+/// Accepts both historical base64-encoded JSON bytes and modern LCDs that return a JSON object.
+pub(crate) fn parse_wasm_smart_query_data<T: serde::de::DeserializeOwned>(
+    data: &serde_json::Value,
+) -> Result<T> {
+    match data {
+        serde_json::Value::String(s) => {
+            let raw = STANDARD
+                .decode(s.trim())
+                .wrap_err("wasm smart query data: invalid base64")?;
+            serde_json::from_slice(&raw).wrap_err("wasm smart query data: JSON decode after base64")
+        }
+        serde_json::Value::Object(_) => serde_json::from_value(data.clone())
+            .wrap_err("wasm smart query data: JSON object decode"),
+        other => Err(eyre!(
+            "wasm smart query data: expected base64 string or JSON object, got {}",
+            match other {
+                serde_json::Value::Null => "null",
+                serde_json::Value::Bool(_) => "bool",
+                serde_json::Value::Number(_) => "number",
+                serde_json::Value::Array(_) => "array",
+                serde_json::Value::String(_) | serde_json::Value::Object(_) => unreachable!(),
+            }
+        )),
+    }
+}
+
 /// Bounded DeliverTx confirmation polling (env: `ORACLE_TX_CONFIRM_*`).
 #[derive(Debug, Clone, Copy)]
 pub struct ConfirmConfig {
@@ -292,10 +320,9 @@ impl TerraSigner {
         let data = body
             .get("data")
             .ok_or_else(|| eyre!("missing data field"))?;
-        let data_str = data.as_str().ok_or_else(|| eyre!("data not string"))?;
-        let raw = STANDARD.decode(data_str.trim())?;
-        let parsed: T = serde_json::from_slice(&raw)?;
-        Ok(parsed)
+        // Terra Classic LCDs disagree: some return CosmWasm `data` as base64 string,
+        // publicnode/hexxagon return the already-decoded JSON object.
+        parse_wasm_smart_query_data(data)
     }
 
     /// Sign + SYNC broadcast. On account sequence mismatch, re-queries account and retries **once**.
@@ -666,6 +693,43 @@ mod tests {
         };
         let raw = serde_json::to_vec(&st).unwrap();
         json!({ "data": STANDARD.encode(raw) })
+    }
+
+    fn sample_state(rate: u128, last_update_sec: u64) -> StateResponse {
+        StateResponse {
+            rate: cosmwasm_std::Uint128::new(rate),
+            last_update_sec,
+            utc_day_id: 1,
+            day_baseline_rate: cosmwasm_std::Uint128::new(rate),
+            paused: false,
+        }
+    }
+
+    #[test]
+    fn parse_wasm_smart_data_accepts_base64_string() {
+        let st = sample_state(1_000_000_000_000_000_000, 42);
+        let body = state_lcd_body(1_000_000_000_000_000_000, 42);
+        let parsed: StateResponse =
+            parse_wasm_smart_query_data(body.get("data").unwrap()).unwrap();
+        assert_eq!(parsed.rate, st.rate);
+        assert_eq!(parsed.last_update_sec, 42);
+    }
+
+    #[test]
+    fn parse_wasm_smart_data_accepts_json_object() {
+        // publicnode / hexxagon LCD shape (Coolify prod tick failure: "data not string")
+        let st = sample_state(1_000_000_000_000_000_000, 0);
+        let data = serde_json::to_value(&st).unwrap();
+        let parsed: StateResponse = parse_wasm_smart_query_data(&data).unwrap();
+        assert_eq!(parsed.rate, st.rate);
+        assert_eq!(parsed.last_update_sec, 0);
+        assert!(!parsed.paused);
+    }
+
+    #[test]
+    fn parse_wasm_smart_data_rejects_array() {
+        let err = parse_wasm_smart_query_data::<StateResponse>(&json!([])).unwrap_err();
+        assert!(err.to_string().contains("expected base64 string or JSON object"));
     }
 
     #[test]

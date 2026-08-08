@@ -21,7 +21,7 @@ RUN apt-get update \
 COPY --from=build /app/target/release/ust1-oracle-service /usr/local/bin/ust1-oracle-service
 
 USER oracle
-ENV RUST_LOG=info,ust1_oracle_service=info \
+ENV RUST_LOG=info \
     HEALTHZ_BIND=0.0.0.0:8080
 EXPOSE 8080
 # Liveness only (process up). Rate freshness is log-based (ORACLE_MAX_SILENCE_SECS).
