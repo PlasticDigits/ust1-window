@@ -93,6 +93,7 @@ fn execute_update_rate(
     st.last_update_sec = now;
     ORACLE_STATE.save(deps.storage, &st)?;
 
+    // Same-rate after throttle is intentional (oracle-service heartbeat, #32).
     Ok(Response::new()
         .add_attribute("action", "update_rate")
         .add_attribute("rate", new_rate))

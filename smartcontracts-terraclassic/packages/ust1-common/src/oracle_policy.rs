@@ -6,7 +6,8 @@
 //! - **INV-ORACLE-DAILY-001**: After UTC day rollover, baseline resets; `new_rate <= day_baseline * (10000 + MAX_DAILY_INCREASE_BPS) / 10000`.
 //!   **Bootstrap:** when `last_update_sec == 0` (never updated), the daily cap is skipped so ops can
 //!   seed the live Venus-normalized rate; returned baseline becomes `new_rate`.
-//! - **INV-ORACLE-MONO-001**: `new_rate >= old_rate`.
+//! - **INV-ORACLE-MONO-001**: `new_rate >= old_rate` (equal rate is allowed; oracle-service
+//!   heartbeat uses same-rate `UpdateRate` after throttle — [GitLab #32](https://gitlab.com/PlasticDigits/ust1-window/-/issues/32)).
 
 use cosmwasm_std::Uint128;
 
@@ -73,6 +74,7 @@ pub fn check_rate_update(
     if new_rate > max_r {
         return Err(OraclePolicyError::DailyCapExceeded);
     }
+    // Same-rate after throttle is Ok (oracle-service heartbeat; INV-ORACLE-MONO-001 is `>=`).
     Ok((day_id, baseline))
 }
 
@@ -95,6 +97,25 @@ mod tests {
         let r = Uint128::new(crate::RATE_SCALE);
         let ok = check_rate_update(100, 0, r, r, 0, r);
         assert!(ok.is_ok());
+    }
+
+    /// Same-rate refresh after the 4h throttle is Ok (heartbeat / **INV-ORACLE-THROTTLE-001**).
+    #[test]
+    fn same_rate_after_throttle_is_ok() {
+        let r = Uint128::new(crate::RATE_SCALE);
+        let last = 1_700_000_000u64;
+        let now = last + crate::MIN_ORACLE_UPDATE_INTERVAL_SECS;
+        check_rate_update(now, last, r, r, last / 86_400, r).unwrap();
+    }
+
+    /// Equal rate one second before throttle is still `UpdateTooSoon` (A3).
+    #[test]
+    fn same_rate_one_second_before_throttle_is_too_soon() {
+        let r = Uint128::new(crate::RATE_SCALE);
+        let last = 1_700_000_000u64;
+        let now = last + crate::MIN_ORACLE_UPDATE_INTERVAL_SECS - 1;
+        let err = check_rate_update(now, last, r, r, last / 86_400, r).unwrap_err();
+        assert!(matches!(err, OraclePolicyError::UpdateTooSoon { .. }));
     }
 
     /// Bootstrap: first update may jump above +2% daily cap; baseline becomes `new_rate`.

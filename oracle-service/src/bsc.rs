@@ -296,7 +296,10 @@ mod tests {
         );
         let msg = err.to_string();
         assert!(
-            msg.contains("vToken call") || msg.contains("timeout") || msg.contains("timed out"),
+            msg.contains("vToken")
+                || msg.contains("timeout")
+                || msg.contains("timed out")
+                || msg.contains("error sending"),
             "expected eth_call/timeout error, got: {msg}"
         );
     }

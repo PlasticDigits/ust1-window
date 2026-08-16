@@ -4,9 +4,12 @@
 //! # Broadcast vs confirmation (INV-ORACLE-LIVENESS-001)
 //!
 //! `BROADCAST_MODE_SYNC` `code == 0` means **CheckTx** (mempool admission) only.
-//! Callers must use [`TerraSigner::wait_for_deliver_tx_success`] and
-//! [`crate::confirm::oracle_state_matches_intended_update`] before recording liveness
-//! ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23), audit C-3).
+//! Callers must use [`TerraSigner::wait_for_deliver_tx_success`] (DeliverTx `code == 0`
+//! on the broadcast hash) and then [`crate::confirm::oracle_tx_events_match_update`]
+//! (wasm events) or [`crate::confirm::oracle_state_matches_intended_update`] (State
+//! fallback when events are stripped) before recording liveness
+//! ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23),
+//! [#32](https://gitlab.com/PlasticDigits/ust1-window/-/issues/32), audit C-3).
 //! See `skills/oracle-liveness-confirm/SKILL.md`.
 
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -99,12 +102,27 @@ pub struct AccountInfo {
     pub account_number: u64,
 }
 
+/// One attribute on a Cosmos `tx_response` event (keys/values decoded from Tendermint base64 when needed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxEventAttribute {
+    pub key: String,
+    pub value: String,
+}
+
+/// One event from LCD `tx_response.events` (or `logs[].events` fallback).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TxEvent {
+    pub ty: String,
+    pub attributes: Vec<TxEventAttribute>,
+}
+
 /// Parsed `tx_response` from LCD `GET /cosmos/tx/v1beta1/txs/{hash}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TxResponseSummary {
     pub txhash: String,
     pub code: u64,
     pub raw_log: String,
+    pub events: Vec<TxEvent>,
 }
 
 /// True when a broadcast / CheckTx error indicates account sequence mismatch.
@@ -193,11 +211,85 @@ pub fn parse_tx_query_body(
     if txhash.is_empty() {
         return Err(eyre!("tx query missing txhash"));
     }
+    let events = parse_tx_events(&tx_response);
     Ok(Some(TxResponseSummary {
         txhash,
         code,
         raw_log,
+        events,
     }))
+}
+
+/// Decode a Tendermint/LCD attribute that may be raw UTF-8 or standard base64.
+fn decode_tendermint_attr(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    const KNOWN: &[&str] = &["_contract_address", "action", "rate", "update_rate"];
+    if KNOWN.contains(&trimmed) {
+        return trimmed.to_string();
+    }
+    let looks_b64 = trimmed
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=');
+    if !looks_b64 {
+        return trimmed.to_string();
+    }
+    match STANDARD.decode(trimmed) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(s) if !s.is_empty() && s.chars().all(|c| !c.is_control()) => s,
+            _ => trimmed.to_string(),
+        },
+        Err(_) => trimmed.to_string(),
+    }
+}
+
+fn parse_event_attributes(attrs: &[serde_json::Value]) -> Vec<TxEventAttribute> {
+    attrs
+        .iter()
+        .filter_map(|a| {
+            let key = a.get("key")?.as_str()?;
+            let value = a.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            Some(TxEventAttribute {
+                key: decode_tendermint_attr(key),
+                value: decode_tendermint_attr(value),
+            })
+        })
+        .collect()
+}
+
+fn parse_events_array(events: &[serde_json::Value]) -> Vec<TxEvent> {
+    events
+        .iter()
+        .filter_map(|ev| {
+            let ty = ev.get("type")?.as_str()?.to_string();
+            let attributes = ev
+                .get("attributes")
+                .and_then(|a| a.as_array())
+                .map(|arr| parse_event_attributes(arr))
+                .unwrap_or_default();
+            Some(TxEvent { ty, attributes })
+        })
+        .collect()
+}
+
+/// Parse wasm/message events from `tx_response.events`, falling back to `logs[].events`.
+pub fn parse_tx_events(tx_response: &serde_json::Value) -> Vec<TxEvent> {
+    let mut out = Vec::new();
+    if let Some(events) = tx_response.get("events").and_then(|e| e.as_array()) {
+        out.extend(parse_events_array(events));
+    }
+    if out.is_empty() {
+        if let Some(logs) = tx_response.get("logs").and_then(|l| l.as_array()) {
+            for log in logs {
+                if let Some(events) = log.get("events").and_then(|e| e.as_array()) {
+                    out.extend(parse_events_array(events));
+                }
+            }
+        }
+    }
+    out
 }
 
 fn truncate_for_error(body: &serde_json::Value) -> String {
@@ -373,12 +465,13 @@ impl TerraSigner {
 
     /// Poll LCD until `expected_txhash` is included with DeliverTx `code == 0`, or timeout.
     ///
+    /// Returns the parsed [`TxResponseSummary`] (including wasm events) on success.
     /// Fail-closed: DeliverTx `code != 0`, hash mismatch, or timeout ⇒ `Err` (no liveness success).
     pub async fn wait_for_deliver_tx_success(
         &self,
         expected_txhash: &str,
         confirm: &ConfirmConfig,
-    ) -> Result<()> {
+    ) -> Result<TxResponseSummary> {
         if expected_txhash.is_empty() {
             return Err(eyre!("empty tx hash cannot be confirmed"));
         }
@@ -401,9 +494,10 @@ impl TerraSigner {
                             outcome = "ok",
                             tx_hash = %expected_txhash,
                             attempts = attempt,
+                            wasm_event_count = summary.events.iter().filter(|e| e.ty.eq_ignore_ascii_case("wasm")).count(),
                             "DeliverTx confirmed code 0"
                         );
-                        return Ok(());
+                        return Ok(summary);
                     }
                     return Err(eyre!(
                         "DeliverTx failed code {}: {}",
@@ -786,6 +880,7 @@ mod tests {
         .unwrap();
         assert_eq!(ok.code, 0);
         assert_eq!(ok.txhash, "ABC");
+        assert!(ok.events.is_empty());
 
         let fail = parse_tx_query_body(
             reqwest::StatusCode::OK,
@@ -794,6 +889,75 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(fail.code, 5);
+    }
+
+    #[test]
+    fn parse_tx_events_from_tx_response_events() {
+        let body = json!({
+            "tx_response": {
+                "txhash": "ABC",
+                "code": 0,
+                "raw_log": "",
+                "events": [{
+                    "type": "wasm",
+                    "attributes": [
+                        {"key": "_contract_address", "value": "terra1oracle"},
+                        {"key": "action", "value": "update_rate"},
+                        {"key": "rate", "value": "1225553374561294951"}
+                    ]
+                }]
+            }
+        });
+        let summary = parse_tx_query_body(reqwest::StatusCode::OK, &body)
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.events.len(), 1);
+        assert_eq!(summary.events[0].ty, "wasm");
+        assert_eq!(summary.events[0].attributes[1].value, "update_rate");
+        assert_eq!(summary.events[0].attributes[2].value, "1225553374561294951");
+    }
+
+    #[test]
+    fn parse_tx_events_decodes_base64_attrs() {
+        // "_contract_address" and "action" as Tendermint base64.
+        let body = json!({
+            "tx_response": {
+                "txhash": "ABC",
+                "code": 0,
+                "events": [{
+                    "type": "wasm",
+                    "attributes": [
+                        {"key": "X2NvbnRyYWN0X2FkZHJlc3M=", "value": "terra1oracle"},
+                        {"key": "YWN0aW9u", "value": "update_rate"},
+                        {"key": "cmF0ZQ==", "value": "2000"}
+                    ]
+                }]
+            }
+        });
+        let events = parse_tx_events(body.get("tx_response").unwrap());
+        assert_eq!(events[0].attributes[0].key, "_contract_address");
+        assert_eq!(events[0].attributes[1].key, "action");
+        assert_eq!(events[0].attributes[2].key, "rate");
+        assert_eq!(events[0].attributes[2].value, "2000");
+    }
+
+    #[test]
+    fn parse_tx_events_falls_back_to_logs() {
+        let tx_response = json!({
+            "logs": [{
+                "events": [{
+                    "type": "wasm",
+                    "attributes": [
+                        {"key": "_contract_address", "value": "terra1oracle"},
+                        {"key": "action", "value": "update_rate"},
+                        {"key": "rate", "value": "7"}
+                    ]
+                }]
+            }]
+        });
+        let events = parse_tx_events(&tx_response);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].attributes[2].value, "7");
     }
 
     #[tokio::test]

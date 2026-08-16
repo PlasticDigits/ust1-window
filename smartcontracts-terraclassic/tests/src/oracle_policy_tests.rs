@@ -22,6 +22,14 @@ fn inv_oracle_daily_cap_blocks_large_jump() {
 }
 
 #[test]
+fn same_rate_after_throttle_is_ok() {
+    let r = Uint128::from(RATE_SCALE);
+    let last = day_ts(10);
+    let now = last + ust1_common::MIN_ORACLE_UPDATE_INTERVAL_SECS;
+    check_rate_update(now, last, r, r, 10, r).unwrap();
+}
+
+#[test]
 fn first_update_bootstrap_allows_venus_seed_jump() {
     let old = Uint128::from(RATE_SCALE);
     let new = Uint128::new(1_225_104_516_022_056_627);
