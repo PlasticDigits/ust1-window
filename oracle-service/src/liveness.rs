@@ -3,10 +3,13 @@
 //! # Invariants
 //!
 //! **INV-ORACLE-LIVENESS-001** ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23),
+//! [#32](https://gitlab.com/PlasticDigits/ust1-window/-/issues/32),
 //! audit C-3): [`LivenessTracker::record_successful_broadcast`] may be called only after
-//! DeliverTx `code == 0` **and** oracle `State` reflects the intended update. See
-//! [`crate::confirm`] and [`crate::terra_tx::TerraSigner::wait_for_deliver_tx_success`].
-//! Operator skill: `skills/oracle-liveness-confirm/SKILL.md`.
+//! DeliverTx `code == 0` **and** either matching wasm `update_rate` events on this contract
+//! **or** (when events are stripped) retried oracle `State` reflects the intended update.
+//! See [`crate::confirm`] and [`crate::terra_tx::TerraSigner::wait_for_deliver_tx_success`].
+//! Operator skills: `skills/oracle-liveness-confirm/SKILL.md`,
+//! `skills/oracle-ops-poll-silence/SKILL.md`.
 //!
 //! Silence alerts (`ORACLE_MAX_SILENCE_SECS`) therefore mean “no confirmed on-chain update”,
 //! not “no mempool CheckTx acceptance”. Timing defaults are **INV-ORACLE-OPS-SILENCE-001**
@@ -30,7 +33,7 @@ impl LivenessTracker {
         }
     }
 
-    /// Record a **confirmed** oracle update (DeliverTx + matching `State` only).
+    /// Record a **confirmed** oracle update (DeliverTx + wasm events or State fallback).
     pub fn record_successful_broadcast(&mut self) {
         self.last_successful_broadcast = Some(Instant::now());
     }

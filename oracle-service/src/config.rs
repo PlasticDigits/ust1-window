@@ -10,9 +10,12 @@
 //! - **INV-ORACLE-OPS-SILENCE-001** — default `ORACLE_MAX_SILENCE_SECS` ≤ window max age so
 //!   liveness pages at or before swap halt.
 //!
-//! Liveness semantics (C-3 / [glab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)):
-//! - **INV-ORACLE-LIVENESS-001** — silence keys off **confirmed** on-chain updates (DeliverTx +
-//!   matching oracle `State`), not CheckTx-only. See `confirm` / `liveness`.
+//! Liveness semantics (C-3 / [glab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23),
+//! [glab #32](https://gitlab.com/PlasticDigits/ust1-window/-/issues/32)):
+//! - **INV-ORACLE-LIVENESS-001** — silence keys off **confirmed** on-chain updates (DeliverTx
+//!   wasm events, or LCD `State` fallback when events are stripped), not CheckTx-only.
+//!   Same-rate Venus readings submit a heartbeat `UpdateRate` once throttle allows so
+//!   `last_update_sec` stays inside window max age. See `confirm` / `liveness`.
 //!
 //! Agent skills: `skills/oracle-ops-poll-silence/SKILL.md`, `skills/oracle-liveness-confirm/SKILL.md`.
 
@@ -39,7 +42,7 @@ pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 3_600;
 /// **INV-ORACLE-OPS-SILENCE-001:** must not exceed
 /// [`DEFAULT_MAX_ORACLE_AGE_SECS`] (+ small grace). Prefer ≤ max age so ops are paged at or
 /// before users are bricked. **INV-ORACLE-LIVENESS-001:** "successful" means DeliverTx +
-/// matching oracle `State`, not CheckTx / `BROADCAST_MODE_SYNC` alone.
+/// matching oracle `State` (or wasm events — #32), not CheckTx / `BROADCAST_MODE_SYNC` alone.
 pub const DEFAULT_ORACLE_MAX_SILENCE_SECS: u64 = DEFAULT_MAX_ORACLE_AGE_SECS;
 
 /// When the only allowed EVM chain is BSC mainnet (56), require the canonical Venus vFDUSD vToken.
@@ -203,8 +206,8 @@ pub struct Config {
     /// Emit a loud log if no confirmed on-chain oracle update for this many seconds
     /// (default [`DEFAULT_ORACLE_MAX_SILENCE_SECS`] = 6h).
     ///
-    /// “Successful” means DeliverTx + matching oracle `State` (INV-ORACLE-LIVENESS-001), not
-    /// CheckTx / `BROADCAST_MODE_SYNC` alone.
+    /// “Successful” means DeliverTx + wasm events (or State fallback) (INV-ORACLE-LIVENESS-001),
+    /// including same-rate heartbeats, not CheckTx / `BROADCAST_MODE_SYNC` alone.
     pub max_silence_since_broadcast_secs: u64,
     /// Max time to wait for DeliverTx inclusion after SYNC broadcast (default 90s).
     pub tx_confirm_timeout_secs: u64,

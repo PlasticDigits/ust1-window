@@ -14,7 +14,8 @@
 # `scripts/deploy_local.py` can store/instantiate optimized wasm automatically.
 #
 # Cross-links: docs/DEPLOYMENT.md (TEST-16), skills/oracle-liveness-confirm,
-# skills/oracle-circuit-breaker, skills/audit-hardening-bundle.
+# skills/oracle-ops-poll-silence, skills/oracle-circuit-breaker,
+# skills/audit-hardening-bundle.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -39,6 +40,8 @@ echo "LocalTerra reachable (${LCD_URL}). Running oracle-service DeliverTx-reject
 cargo test -p ust1-oracle-service -- \
   deliver_tx_failure_does_not_allow_liveness \
   run_once_equal_rate_does_not_record_liveness \
+  run_once_equal_rate_heartbeat_records_liveness_on_events \
+  matching_events_and_lagged_state_records_ok \
   run_once_policy_throttle_does_not_record_liveness \
   run_once_mono_decrease_does_not_record_liveness \
   read_exchange_rate_stored_times_out

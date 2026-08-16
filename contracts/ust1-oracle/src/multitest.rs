@@ -209,6 +209,81 @@ fn inv_oracle_throttle_second_update_too_soon() {
 }
 
 #[test]
+fn same_rate_update_after_throttle_advances_last_update_and_emits() {
+    // Heartbeat path ([GitLab #32](https://gitlab.com/PlasticDigits/ust1-window/-/issues/32)):
+    // equal-rate `UpdateRate` after 4h advances `last_update_sec` and emits `action=update_rate`.
+    let mut app = App::default();
+    let gov = Addr::unchecked("gov");
+    let bot = Addr::unchecked("bot");
+    let code = app.store_code(oracle_contract());
+    let initial = Uint128::from(RATE_SCALE);
+    let oracle = app
+        .instantiate_contract(
+            code,
+            gov,
+            &InstantiateMsg {
+                governance: "gov".into(),
+                oracle_operator: bot.to_string(),
+                initial_rate: initial,
+            },
+            &[],
+            "oracle",
+            None,
+        )
+        .unwrap();
+
+    let first_ts = 10_000u64;
+    set_time(&mut app, first_ts);
+    app.execute_contract(
+        bot.clone(),
+        oracle.clone(),
+        &ExecuteMsg::UpdateRate { new_rate: initial },
+        &[],
+    )
+    .unwrap();
+    let st0: crate::msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(&oracle, &QueryMsg::State {})
+        .unwrap();
+    assert_eq!(st0.rate, initial);
+    assert_eq!(st0.last_update_sec, first_ts);
+
+    let heartbeat_ts = first_ts + ust1_common::MIN_ORACLE_UPDATE_INTERVAL_SECS;
+    set_time(&mut app, heartbeat_ts);
+    let res = app
+        .execute_contract(
+            bot,
+            oracle.clone(),
+            &ExecuteMsg::UpdateRate { new_rate: initial },
+            &[],
+        )
+        .unwrap();
+    let wasm = res
+        .events
+        .iter()
+        .find(|e| e.ty == "wasm")
+        .expect("wasm event");
+    let get = |key: &str| -> String {
+        wasm.attributes
+            .iter()
+            .find(|a| a.key == key)
+            .unwrap_or_else(|| panic!("missing attr {key}"))
+            .value
+            .clone()
+    };
+    assert_eq!(get("action"), "update_rate");
+    assert_eq!(get("rate"), initial.to_string());
+
+    let st1: crate::msg::StateResponse = app
+        .wrap()
+        .query_wasm_smart(oracle, &QueryMsg::State {})
+        .unwrap();
+    assert_eq!(st1.rate, initial);
+    assert_eq!(st1.last_update_sec, heartbeat_ts);
+    assert!(st1.last_update_sec > st0.last_update_sec);
+}
+
+#[test]
 fn inv_oracle_mono_decrease_rejected() {
     // **INV-ORACLE-MONO-001**
     let mut app = App::default();

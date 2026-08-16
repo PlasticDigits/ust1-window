@@ -26,7 +26,7 @@ The oracle service applies the **same** rate policy as the chain before broadcas
 - **INV-ORACLE-DAILY-001** — UTC calendar-day increase cap (2%).
 - **INV-ORACLE-MONO-001** — monotonic non-decreasing on-chain rate.
 - **INV-ORACLE-PAUSE-001** — when oracle `paused=true`, `UpdateRate` is blocked and **all** windows reading that oracle reject deposit/withdraw immediately (circuit breaker; do not wait for `max_oracle_age_sec`). See [Emergency pause](#emergency-pause-oracle-circuit-breaker-vs-window) ([GitLab #22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22); audit C-2 #1). Agent skill: [`skills/oracle-circuit-breaker`](../skills/oracle-circuit-breaker/SKILL.md).
-- **INV-ORACLE-LIVENESS-001** — oracle-service silence/liveness success only after DeliverTx `code == 0` **and** oracle `State` reflects the intended update (not CheckTx alone). Equal-rate and policy-skip paths must **not** call `record_successful_broadcast`. See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md) ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23), [#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28), audit C-3).
+- **INV-ORACLE-LIVENESS-001** — oracle-service silence/liveness success only after DeliverTx `code == 0` **and** either wasm `action=update_rate` events on this oracle contract with matching `rate`, **or** (when events are stripped) retried LCD `State` reflects the intended update. CheckTx alone is not success. Equal-rate **inside** the 4h throttle and other policy skips must **not** call `record_successful_broadcast`. Equal-rate **after** throttle is a heartbeat `UpdateRate` (`event=oracle_heartbeat`). Lagged LCD `State` after event proof is `oracle_state_lag_after_event_ok` (warn only). See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md) and [`skills/oracle-ops-poll-silence/SKILL.md`](../skills/oracle-ops-poll-silence/SKILL.md) ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23), [#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28), [#32](https://gitlab.com/PlasticDigits/ust1-window/-/issues/32), audit C-3).
 - **INV-MINTER-001** — pinned `cw20-mintable` `UpdateMinter` clears the old primary from `MINTERS` (`None` or rotation). In-repo proof: `ust1-integration-tests` `cw20_minter_integration` ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)/[#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28); skill [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md)).
 
 ---
@@ -35,13 +35,13 @@ The oracle service applies the **same** rate policy as the chain before broadcas
 
 | Layer | Status | Where |
 |-------|--------|--------|
-| DeliverTx-reject → no liveness | **Always-on** (wiremock) | `ust1-oracle-service` `deliver_tx_failure_does_not_allow_liveness` (+ equal-rate / policy-skip / BSC hang) |
+| DeliverTx-reject → no liveness | **Always-on** (wiremock) | `ust1-oracle-service` `deliver_tx_failure_does_not_allow_liveness` (+ equal-rate-inside-throttle / heartbeat+lagged-State / policy-skip / BSC hang) |
 | Oracle pause fail-closed | **Always-on** (multitest + integration) | `ust1-window` multitest + `ust1-integration-tests` `oracle_paused_blocks_deposit_and_withdraw_while_rate_fresh` |
 | Full LocalTerra wasm e2e | **Optional / gated** | `make test-localterra-smoke` → [`scripts/localterra_e2e_smoke.sh`](../scripts/localterra_e2e_smoke.sh); CI jobs `localterra-e2e` (GitLab **manual** + `allow_failure`, GitHub `continue-on-error`) |
 
 **Ownership:** PlasticDigits. The gated job **skips cleanly** (exit 0) when LCD/RPC is down so default pipelines stay fast. Promote to required only after [`scripts/deploy_local.py`](../scripts/deploy_local.py) can store/instantiate optimized wasm without manual `terrad` steps. Mainnet ops probes (live withdraw, staging restart logs) remain runbook items under Phase 5 / [#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19) — not TEST-16.
 
-Agent skills: [`oracle-liveness-confirm`](../skills/oracle-liveness-confirm/SKILL.md), [`oracle-circuit-breaker`](../skills/oracle-circuit-breaker/SKILL.md), [`audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md).
+Agent skills: [`oracle-liveness-confirm`](../skills/oracle-liveness-confirm/SKILL.md), [`oracle-ops-poll-silence`](../skills/oracle-ops-poll-silence/SKILL.md), [`oracle-circuit-breaker`](../skills/oracle-circuit-breaker/SKILL.md), [`audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md).
 
 ---
 
@@ -684,7 +684,7 @@ curl -fsS http://127.0.0.1:8080/healthz
 - Enable host **notifications** for **crashes and deploy failures**.
 - **HTTP health check:** `GET /healthz` on `HEALTHZ_BIND` (default `0.0.0.0:8080`). This is **liveness only** (process up) — it does **not** prove a fresh on-chain oracle rate.
 - The binary emits **`error!`** if no **confirmed on-chain oracle update** exceeds `ORACLE_MAX_SILENCE_SECS` (default **21600** s) — forward logs to your SIEM or log drain and page on that pattern (`LIVENESS_ORACLE_NO_BROADCAST`). Also watch startup **`ORACLE_OPS_TIMING_MISCONFIG`** warnings.
-- **Silence tracking means confirmed updates** (**INV-ORACLE-LIVENESS-001**, [GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23)): after `BROADCAST_MODE_SYNC` CheckTx, the service waits for DeliverTx `code == 0` and verifies oracle `State` (`last_update_sec` advanced, `rate` matches the proposed update) before recording liveness. Mempool admission alone does **not** reset the silence timer. See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md).
+- **Silence tracking means confirmed updates** (**INV-ORACLE-LIVENESS-001**, [GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23), [#32](https://gitlab.com/PlasticDigits/ust1-window/-/issues/32)): after `BROADCAST_MODE_SYNC` CheckTx, the service waits for DeliverTx `code == 0` and confirms via wasm `action=update_rate` events on `ORACLE_CONTRACT` (matching `rate`). If wasm attrs are stripped, it retries LCD `State` (`last_update_sec` advanced, `rate` matches). Mempool admission alone does **not** reset the silence timer. A lagged `State` query after event proof logs `oracle_state_lag_after_event_ok` and still records liveness. Same-rate Venus readings submit a heartbeat `UpdateRate` once the 4h throttle allows (`event=oracle_heartbeat`) so window `max_oracle_age_sec` (6h) is not exhausted while Venus is flat — do **not** widen or disable on-chain age checks (DEX **O2**). See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md) and [`skills/oracle-ops-poll-silence/SKILL.md`](../skills/oracle-ops-poll-silence/SKILL.md).
 - Combine `/healthz` with log-based silence alerts; neither alone guarantees rate freshness.
 
 ---
@@ -705,7 +705,7 @@ Loaded in [`Config::from_env`](../oracle-service/src/config.rs). Timing defaults
 | `TERRA_MNEMONIC` | Oracle operator seed (**secret**). |
 | `ORACLE_CONTRACT` | `ust1-oracle` address. |
 | `POLL_INTERVAL_SECS` | Default **3600** s (1h). Keep ≪ window `max_oracle_age_sec` (default 21600). Do not set to 21600 — zero missed-tick margin (H-3 / #24). |
-| `ORACLE_MAX_SILENCE_SECS` | Loud log if no **confirmed** on-chain oracle update (DeliverTx + matching `State`; default **21600** s). Prefer ≤ window max oracle age; documented grace ≤ `max_age + poll`. |
+| `ORACLE_MAX_SILENCE_SECS` | Loud log if no **confirmed** on-chain oracle update (DeliverTx + wasm events or State fallback, including heartbeats; default **21600** s). Prefer ≤ window max oracle age; documented grace ≤ `max_age + poll`. Alert text means “no confirmed include”, not “Venus unchanged”. |
 | `ORACLE_TX_CONFIRM_TIMEOUT_SECS` | Max wait for DeliverTx after SYNC broadcast (default 90). |
 | `ORACLE_TX_CONFIRM_POLL_INTERVAL_MS` | Inclusion poll interval (default 2000). |
 | `HEALTHZ_BIND` | Liveness HTTP bind (`host:port`, default `0.0.0.0:8080`). Set `off`/`disabled`/empty to disable. Probe is process-up only (`GET /healthz`). |
@@ -718,7 +718,22 @@ Loaded in [`Config::from_env`](../oracle-service/src/config.rs). Timing defaults
 poll < max_oracle_age                 # default 3600 < 21600
 silence ≤ max_oracle_age              # preferred (default 21600)
 silence ≤ max_oracle_age + poll       # documented grace ceiling
+throttle (4h) < max_age (6h)          # heartbeat uses this 2h gap (~two 1h polls)
 ```
+
+Healthy process: max gap between **confirmed** updates should be ≤ **4h + one poll + confirm timeout** (~5h), inside the 6h window budget.
+
+**Expected logs (heartbeat + event-confirm):**
+
+```text
+event="oracle_heartbeat" tick_kind="heartbeat"  # same-rate UpdateRate after 4h
+event="oracle_event_confirm" outcome="ok"       # DeliverTx wasm action=update_rate matched
+event="oracle_state_lag_after_event_ok"         # LCD State still stale; liveness still recorded
+event="oracle_state_confirm" outcome="ok"       # State matched (happy path or events-absent fallback)
+alert="LIVENESS_ORACLE_NO_BROADCAST"            # no confirmed include within silence window
+```
+
+Do **not** disable or widen window `max_oracle_age_sec` to work around a flat Venus feed (DEX **O2**). Heartbeat is the operator fix; DEX runbook/UI gates are a linked follow-up ([cl8y-dex-terraclassic#503](https://gitlab.com/PlasticDigits/cl8y-dex-terraclassic/-/issues/503)).
 
 Env overrides remain supported; mis-sets that violate the relationship log `ORACLE_OPS_TIMING_MISCONFIG` at startup (and advisories from `scripts/verify_oracle_operator_env.sh`) but do not hard-fail — operator responsibility if on-chain `max_oracle_age_sec` was customized.
 
@@ -787,6 +802,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-08-16 | Oracle-service heartbeat (same-rate `UpdateRate` after 4h throttle) + confirm from DeliverTx wasm events; lagged LCD `State` no longer fail-closes a proven include ([#32](https://gitlab.com/PlasticDigits/ust1-window/-/issues/32); skills [`oracle-liveness-confirm`](../skills/oracle-liveness-confirm/SKILL.md), [`oracle-ops-poll-silence`](../skills/oracle-ops-poll-silence/SKILL.md)). |
 | 2026-08-08 | Mainnet oracle **11568** + first Venus-normalized rate `1225104516022056627` seeded **2026-08-08 11:04:37 UTC** (`last_update_sec=1786187077`); store `E8116018…1265` ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-08-08 | Oracle bootstrap: first `UpdateRate` (`last_update_sec==0`) skips daily cap and seeds Venus-normalized `R`; oracle-service divides `exchangeRateStored` by `10^(uDec-vDec)` ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-08-08 | Root [`Dockerfile`](../Dockerfile) + [`.dockerignore`](../.dockerignore) for `ust1-oracle-service` Coolify/Docker deploy; Coolify runbook in this doc ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
