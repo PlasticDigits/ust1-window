@@ -20,6 +20,10 @@ fn default_max_oracle_age_sec() -> u64 {
 ///   response (burn first); either failure reverts the tx.
 /// - **INV-SCHEMA-001**: `InstantWithdrawCw20` wire JSON must match pinned ustr-cmm treasury
 ///   schema (`treasury::USTR_CMM_TREASURY_SCHEMA_REV`); see [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21) / audit C-1.
+/// - **INV-FEE-EVENT-001**: deposit/withdraw wasm names `fee_amount` (raw UST1 withheld) and
+///   `fee_asset` (`ust1_token`). Additive; do not rename `action` / `ust1_out` / `vfdusd_out` /
+///   `fee_*_bps`. See `contract::with_fee_event_attrs` and `skills/window-fee-amount-events`
+///   ([#33](https://gitlab.com/PlasticDigits/ust1-window/-/issues/33)).
 #[cw_serde]
 pub struct Config {
     pub governance: Addr,

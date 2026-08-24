@@ -1,5 +1,5 @@
-//! **INV-SWAP-001 / INV-LIMIT-001 / INV-WITHDRAW-001**: End-to-end deposit and withdraw
-//! via treasury `InstantWithdrawCw20` (no CW20 allowance).
+//! **INV-SWAP-001 / INV-LIMIT-001 / INV-WITHDRAW-001 / INV-FEE-EVENT-001**: End-to-end
+//! deposit and withdraw via treasury `InstantWithdrawCw20` (no CW20 allowance).
 use cosmwasm_std::{to_json_binary, Addr, Empty, Timestamp, Uint128};
 use cw20::{Cw20ExecuteMsg, MinterResponse};
 use cw_multi_test::{App, ContractWrapper, Executor};
@@ -772,4 +772,111 @@ fn oracle_paused_blocks_deposit_and_withdraw_while_rate_fresh() {
         &[],
     )
     .unwrap();
+}
+
+fn wasm_attr(res: &cw_multi_test::AppResponse, key: &str) -> String {
+    for ev in res.events.iter().filter(|e| e.ty == "wasm") {
+        let is_swap = ev
+            .attributes
+            .iter()
+            .any(|a| a.key == "action" && (a.value == "deposit" || a.value == "withdraw"));
+        if !is_swap {
+            continue;
+        }
+        if let Some(attr) = ev.attributes.iter().find(|a| a.key == key) {
+            return attr.value.clone();
+        }
+        panic!("missing window wasm attr {key} in {:?}", ev.attributes);
+    }
+    panic!(
+        "missing window deposit/withdraw wasm event in {:?}",
+        res.events
+    );
+}
+
+/// **INV-FEE-EVENT-001**: integration layer locks `fee_amount` + `fee_asset` (not bps-only).
+#[test]
+fn inv_fee_event_001_deposit_and_withdraw_emit_fee_amount() {
+    let WindowEnv {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        ust1,
+        window,
+        oracle,
+        ..
+    } = setup_window_env();
+
+    commit_oracle_rate(&mut app, &oracle, &Addr::unchecked("bot"));
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(10_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let dep = Uint128::from(1_000_000u128);
+    let dep_res = app
+        .execute_contract(
+            user.clone(),
+            vfdusd.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: dep,
+                msg: to_json_binary(&window_msg::Cw20HookMsg::Deposit {}).unwrap(),
+            },
+            &[],
+        )
+        .unwrap();
+
+    let expected_fee = ust1_common::math::fee_amount_ust1(dep, DEFAULT_FEE_BPS).unwrap();
+    assert_eq!(wasm_attr(&dep_res, "action"), "deposit");
+    assert_eq!(wasm_attr(&dep_res, "fee_amount"), expected_fee.to_string());
+    assert_eq!(wasm_attr(&dep_res, "fee_asset"), ust1.to_string());
+    assert_ne!(wasm_attr(&dep_res, "fee_asset"), vfdusd.to_string());
+    assert_eq!(wasm_attr(&dep_res, "ust1_out"), "990000");
+    assert_eq!(
+        wasm_attr(&dep_res, "fee_total_bps"),
+        DEFAULT_FEE_BPS.to_string()
+    );
+
+    let bal: cw20::BalanceResponse = app
+        .wrap()
+        .query_wasm_smart(
+            ust1.clone(),
+            &cw20::Cw20QueryMsg::Balance {
+                address: user.to_string(),
+            },
+        )
+        .unwrap();
+    let wd_res = app
+        .execute_contract(
+            user,
+            ust1.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: bal.balance,
+                msg: to_json_binary(&window_msg::Cw20HookMsg::Withdraw {
+                    min_vfdusd_out: Uint128::zero(),
+                })
+                .unwrap(),
+            },
+            &[],
+        )
+        .unwrap();
+
+    let wd_fee = ust1_common::math::fee_amount_ust1(bal.balance, DEFAULT_FEE_BPS).unwrap();
+    assert_eq!(wasm_attr(&wd_res, "action"), "withdraw");
+    assert_eq!(wasm_attr(&wd_res, "fee_amount"), wd_fee.to_string());
+    assert_eq!(wasm_attr(&wd_res, "fee_asset"), ust1.to_string());
+    assert_ne!(
+        wasm_attr(&wd_res, "fee_amount"),
+        wasm_attr(&wd_res, "vfdusd_out")
+    );
 }

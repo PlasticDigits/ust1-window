@@ -1,4 +1,9 @@
 //! Swap window: vFDUSD ↔ UST1 using oracle rate and fee on the UST1 leg.
+//!
+//! **INV-FEE-EVENT-001** ([#33](https://gitlab.com/PlasticDigits/ust1-window/-/issues/33)):
+//! successful `deposit` / `withdraw` wasm events name `fee_amount` (raw UST1 withheld) and
+//! `fee_asset` (config `ust1_token`). Additive — do not rename `action`, `ust1_out`,
+//! `vfdusd_out`, or `fee_*_bps`. Skill: `skills/window-fee-amount-events`.
 
 use cosmwasm_std::{
     to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, QueryRequest, Response, StdResult,
@@ -125,6 +130,22 @@ fn ensure_limits(
     Ok(())
 }
 
+/// Additive fee attrs on the window wasm event (same `_contract_address` CosmWasm adds).
+///
+/// **INV-FEE-EVENT-001**: `fee_amount` is UST1 withheld (deposit: pre-fee UST1 − `ust1_out`;
+/// withdraw: gross UST1 − after-fee UST1). `fee_asset` is UST1 CW20 — never vFDUSD
+/// (PFee-7 / P550-11). Indexer stamps `fee_usd` off-chain; do not emit a derived USD.
+fn with_fee_event_attrs(response: Response, cfg: &Config, fee_amount: Uint128) -> Response {
+    let (fee_chain_tax_bps, fee_cmm_protocol_bps) =
+        ust1_common::fee_split::chain_tax_and_cmm_protocol(cfg.fee_bps);
+    response
+        .add_attribute("fee_total_bps", cfg.fee_bps.to_string())
+        .add_attribute("fee_chain_tax_bps", fee_chain_tax_bps.to_string())
+        .add_attribute("fee_cmm_protocol_bps", fee_cmm_protocol_bps.to_string())
+        .add_attribute("fee_amount", fee_amount)
+        .add_attribute("fee_asset", cfg.ust1_token.as_str())
+}
+
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
@@ -228,11 +249,15 @@ fn deposit(
     let oracle_state = query_oracle_state(deps.as_ref(), &cfg.oracle)?;
     ensure_oracle_usable(&env, &oracle_state, cfg.max_oracle_age_sec)?;
     let rate = oracle_state.rate;
-    let ust1_out = ust1_common::math::deposit_vfdusd_to_ust1(amount_vfdusd, rate, cfg.fee_bps)?;
+    // INV-SWAP-001: same composition as `deposit_vfdusd_to_ust1` (rate then UST1-leg fee).
+    let before_fee_ust1 = ust1_common::math::vfdusd_to_ust1_before_fee(amount_vfdusd, rate)?;
+    let ust1_out = ust1_common::math::apply_fee_ust1(before_fee_ust1, cfg.fee_bps)?;
     // INV-SWAP-003: deposit must revert when ust1_out == 0 (no treasury forward / Mint(0)).
     if ust1_out.is_zero() {
         return Err(ContractError::ZeroOutput {});
     }
+    // INV-FEE-EVENT-001: name withheld UST1 (pre-fee − net). Do not emit vFDUSD as fee_amount.
+    let fee_amount = before_fee_ust1.checked_sub(ust1_out)?;
 
     let mut rolling = ROLLING.load(deps.storage)?;
     ensure_limits(&env, &mut rolling, &cfg, ust1_out)?;
@@ -256,18 +281,16 @@ fn deposit(
         funds: vec![],
     };
 
-    let (fee_chain_tax_bps, fee_cmm_protocol_bps) =
-        ust1_common::fee_split::chain_tax_and_cmm_protocol(cfg.fee_bps);
-
-    Ok(Response::new()
-        .add_message(mint)
-        .add_message(forward_vfdusd)
-        .add_attribute("action", "deposit")
-        .add_attribute("ust1_out", ust1_out)
-        .add_attribute("fee_total_bps", cfg.fee_bps.to_string())
-        .add_attribute("fee_chain_tax_bps", fee_chain_tax_bps.to_string())
-        .add_attribute("fee_cmm_protocol_bps", fee_cmm_protocol_bps.to_string())
-        .add_attribute("vfdusd_to_treasury", amount_vfdusd))
+    Ok(with_fee_event_attrs(
+        Response::new()
+            .add_message(mint)
+            .add_message(forward_vfdusd)
+            .add_attribute("action", "deposit")
+            .add_attribute("ust1_out", ust1_out)
+            .add_attribute("vfdusd_to_treasury", amount_vfdusd),
+        &cfg,
+        fee_amount,
+    ))
 }
 
 fn withdraw(
@@ -286,11 +309,16 @@ fn withdraw(
     let oracle_state = query_oracle_state(deps.as_ref(), &cfg.oracle)?;
     ensure_oracle_usable(&env, &oracle_state, cfg.max_oracle_age_sec)?;
     let rate = oracle_state.rate;
-    let v_out = ust1_common::math::withdraw_gross_ust1_to_vfdusd(gross_ust1, rate, cfg.fee_bps)?;
+    // INV-SWAP-002: same composition as `withdraw_gross_ust1_to_vfdusd` (UST1-leg fee, then rate).
+    let after_fee_ust1 = ust1_common::math::withdraw_ust1_after_fee(gross_ust1, cfg.fee_bps)?;
+    let v_out = ust1_common::math::ust1_after_fee_to_vfdusd(after_fee_ust1, rate)?;
     // INV-SWAP-004: withdraw must revert when v_out == 0 (no Burn for nothing).
     if v_out.is_zero() {
         return Err(ContractError::ZeroOutput {});
     }
+    // INV-FEE-EVENT-001: name withheld UST1 (gross − after-fee). `vfdusd_out` / `min_vfdusd_out`
+    // are not the fee.
+    let fee_amount = gross_ust1.checked_sub(after_fee_ust1)?;
     if v_out < min_out {
         return Err(ContractError::BelowMinimum {});
     }
@@ -315,17 +343,15 @@ fn withdraw(
     let pull_v =
         treasury::instant_withdraw_cw20_msg(&cfg.cmm_treasury, &user, &cfg.vfdusd_token, v_out)?;
 
-    let (fee_chain_tax_bps, fee_cmm_protocol_bps) =
-        ust1_common::fee_split::chain_tax_and_cmm_protocol(cfg.fee_bps);
-
-    Ok(Response::new()
-        .add_message(burn)
-        .add_message(pull_v)
-        .add_attribute("action", "withdraw")
-        .add_attribute("vfdusd_out", v_out)
-        .add_attribute("fee_total_bps", cfg.fee_bps.to_string())
-        .add_attribute("fee_chain_tax_bps", fee_chain_tax_bps.to_string())
-        .add_attribute("fee_cmm_protocol_bps", fee_cmm_protocol_bps.to_string()))
+    Ok(with_fee_event_attrs(
+        Response::new()
+            .add_message(burn)
+            .add_message(pull_v)
+            .add_attribute("action", "withdraw")
+            .add_attribute("vfdusd_out", v_out),
+        &cfg,
+        fee_amount,
+    ))
 }
 
 fn exec_set_limits(

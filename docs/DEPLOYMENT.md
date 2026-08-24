@@ -28,6 +28,7 @@ The oracle service applies the **same** rate policy as the chain before broadcas
 - **INV-ORACLE-PAUSE-001** — when oracle `paused=true`, `UpdateRate` is blocked and **all** windows reading that oracle reject deposit/withdraw immediately (circuit breaker; do not wait for `max_oracle_age_sec`). See [Emergency pause](#emergency-pause-oracle-circuit-breaker-vs-window) ([GitLab #22](https://gitlab.com/PlasticDigits/ust1-window/-/issues/22); audit C-2 #1). Agent skill: [`skills/oracle-circuit-breaker`](../skills/oracle-circuit-breaker/SKILL.md).
 - **INV-ORACLE-LIVENESS-001** — oracle-service silence/liveness success only after DeliverTx `code == 0` **and** either wasm `action=update_rate` events on this oracle contract with matching `rate`, **or** (when events are stripped) retried LCD `State` reflects the intended update. CheckTx alone is not success. Equal-rate **inside** the 4h throttle and other policy skips must **not** call `record_successful_broadcast`. Equal-rate **after** throttle is a heartbeat `UpdateRate` (`event=oracle_heartbeat`). Lagged LCD `State` after event proof is `oracle_state_lag_after_event_ok` (warn only). See [`skills/oracle-liveness-confirm/SKILL.md`](../skills/oracle-liveness-confirm/SKILL.md) and [`skills/oracle-ops-poll-silence/SKILL.md`](../skills/oracle-ops-poll-silence/SKILL.md) ([GitLab #23](https://gitlab.com/PlasticDigits/ust1-window/-/issues/23), [#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28), [#32](https://gitlab.com/PlasticDigits/ust1-window/-/issues/32), audit C-3).
 - **INV-MINTER-001** — pinned `cw20-mintable` `UpdateMinter` clears the old primary from `MINTERS` (`None` or rotation). In-repo proof: `ust1-integration-tests` `cw20_minter_integration` ([#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)/[#28](https://gitlab.com/PlasticDigits/ust1-window/-/issues/28); skill [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md)).
+- **INV-FEE-EVENT-001** — successful window `deposit` / `withdraw` wasm events name `fee_amount` (raw UST1 withheld) and `fee_asset` (UST1 CW20). Additive; do not reconstruct from `ust1_out × bps` or emit vFDUSD as the fee. Live **11566** does not emit these yet — migrate the **same** `WINDOW_ADDR` after store (do not instantiate a second window). Skill: [`skills/window-fee-amount-events`](../skills/window-fee-amount-events/SKILL.md) ([#33](https://gitlab.com/PlasticDigits/ust1-window/-/issues/33); DEX [#614](https://gitlab.com/PlasticDigits/cl8y-dex-terraclassic/-/issues/614)).
 
 ---
 
@@ -94,8 +95,31 @@ Window swap guards (audit hardening, [issue #25](https://gitlab.com/PlasticDigit
 - **INV-DECIMALS-001** — at `ust1-window` instantiate, vFDUSD token decimals must be **≥** UST1 token decimals (`validate_token_decimals`; atom scaling assumes D≥U).
 - **INV-SWAP-003** — deposit reverts when computed `ust1_out == 0` (no treasury forward / `Mint(0)`).
 - **INV-SWAP-004** — withdraw reverts when computed `v_out == 0` (no burn-for-nothing).
+- **INV-FEE-EVENT-001** — see [Window fee events](#window-fee-events-deposit--withdraw-33) (`fee_amount` + `fee_asset`).
 
-Agent skill for these invariants and ops knobs: [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md).
+Agent skill for these invariants and ops knobs: [`skills/audit-hardening-bundle`](../skills/audit-hardening-bundle/SKILL.md). Fee-event ingest: [`skills/window-fee-amount-events`](../skills/window-fee-amount-events/SKILL.md).
+
+### Window fee events (deposit / withdraw) ([#33](https://gitlab.com/PlasticDigits/ust1-window/-/issues/33))
+
+Additive attrs on the **window** wasm event (CosmWasm already adds `_contract_address`). Do not rename existing 11566 keys. Fee denomination is **UST1**, not vFDUSD (DEX prices hub UST1; PFee-7 / P550-11). Indexer stamps `fee_usd` at ingest — do not emit a derived USD.
+
+| Action | Attr | Meaning |
+|--------|------|---------|
+| `deposit` | `action` | `deposit` |
+| | `ust1_out` | Net UST1 minted (**post-fee**) |
+| | `vfdusd_to_treasury` | Full vFDUSD input forwarded (not the fee) |
+| | `fee_total_bps` / `fee_chain_tax_bps` / `fee_cmm_protocol_bps` | Attribution split (not a transfer) |
+| | **`fee_amount`** | Raw UST1 withheld: pre-fee UST1 − `ust1_out` (`ust1_common::math::fee_amount_ust1`) |
+| | **`fee_asset`** | UST1 CW20 bech32 (`config.ust1_token`) |
+| `withdraw` | `action` | `withdraw` |
+| | `vfdusd_out` | Net vFDUSD pulled (**post-fee**). Not the fee. `min_vfdusd_out` is slippage only. |
+| | `fee_total_bps` / `fee_chain_tax_bps` / `fee_cmm_protocol_bps` | Same attribution split |
+| | **`fee_amount`** | Raw UST1 withheld: gross UST1 sent − after-fee UST1 |
+| | **`fee_asset`** | Same UST1 CW20 |
+
+`fee_bps=0` emits `fee_amount=0` (indexer skips non-positive). Pause / stale oracle / dust rejects never emit a success event.
+
+**Migrate (do not instantiate a second window):** store new `ust1_window.wasm`, migrate `WINDOW_ADDR=terra1zxwpzpzpleatqn39r00grau4yt29sld8pw78s7ktvjafnj5nsaxq0h3rh2`, record the replacement code id (today **11566**). Keep DEX `UST1_WINDOW_ADDRESS` on that address. After migrate, capture one deposit and one withdraw so Coolify `protocol_fee_events` `ust1_mint` / `ust1_redeem` increment (remaining DEX [#614](https://gitlab.com/PlasticDigits/cl8y-dex-terraclassic/-/issues/614) live-tx criterion).
 
 ---
 
@@ -246,6 +270,7 @@ Venus vFDUSD on BSC is **LockUnlock** (`registerToken` type **`0`**). Terra CW20
 - [x] **Migrate oracle** to Venus-bootstrap code **11568** (store tx `E8116018…1265`; prior interim **11567**).
 - [x] **UST1 minters:** window `terra1zxwp…` is in UST1 `minters` (governance self-mint cleanup / INV-MINTER-001 still optional).
 - [x] **Treasury / withdraw inventory (Option 3):** treasury code **11564**; `SetCw20Spender` + `limit_24h=10000000000` for vFDUSD → window (see Phase 5). Schema pin / CI: [#21](https://gitlab.com/PlasticDigits/ust1-window/-/issues/21).
+- [ ] **Window fee events ([#33](https://gitlab.com/PlasticDigits/ust1-window/-/issues/33)):** store + migrate **same** `WINDOW_ADDR` (`terra1zxwp…`) to wasm that emits `fee_amount` + `fee_asset`; record new code id here (replaces **11566**). Do **not** instantiate a second window — DEX `UST1_WINDOW_ADDRESS` pin stays the address. Notify DEX ops after migrate so Coolify indexer can census `ust1_mint` / `ust1_redeem` (closes remaining DEX [#614](https://gitlab.com/PlasticDigits/cl8y-dex-terraclassic/-/issues/614) live-tx criterion).
 - [ ] **Pre-announce:** schema conformance green at pin rev; **live withdraw probe** tx recorded (Phase 5 §2 step 4) — needs treasury vFDUSD inventory.
 - [ ] **Governance handoff:** if required, run `ProposeGovernance` / `AcceptGovernance` on oracle and window.
 - [x] **First oracle commit:** Venus-normalized `UpdateRate` seeded **2026-08-08 11:04:37 UTC** (`rate=1225104516022056627`, `last_update_sec=1786187077`).
@@ -802,6 +827,7 @@ terrad query wasm contract-state smart "$WINDOW_ADDR" '{"effective_swap":{}}' --
 
 | Date | Change |
 |------|--------|
+| 2026-08-24 | Window deposit/withdraw wasm emit `fee_amount` (raw UST1 withheld) + `fee_asset` (UST1 CW20) for DEX `/protocol` ingest (**INV-FEE-EVENT-001**, [#33](https://gitlab.com/PlasticDigits/ust1-window/-/issues/33); skill [`window-fee-amount-events`](../skills/window-fee-amount-events/SKILL.md)). Live **11566** still lacks these until store+migrate of the same `terra1zxwp…` address. |
 | 2026-08-16 | Oracle-service heartbeat (same-rate `UpdateRate` after 4h throttle) + confirm from DeliverTx wasm events; lagged LCD `State` no longer fail-closes a proven include ([#32](https://gitlab.com/PlasticDigits/ust1-window/-/issues/32); skills [`oracle-liveness-confirm`](../skills/oracle-liveness-confirm/SKILL.md), [`oracle-ops-poll-silence`](../skills/oracle-ops-poll-silence/SKILL.md)). |
 | 2026-08-08 | Mainnet oracle **11568** + first Venus-normalized rate `1225104516022056627` seeded **2026-08-08 11:04:37 UTC** (`last_update_sec=1786187077`); store `E8116018…1265` ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |
 | 2026-08-08 | Oracle bootstrap: first `UpdateRate` (`last_update_sec==0`) skips daily cap and seeds Venus-normalized `R`; oracle-service divides `exchangeRateStored` by `10^(uDec-vDec)` ([#19](https://gitlab.com/PlasticDigits/ust1-window/-/issues/19)). |

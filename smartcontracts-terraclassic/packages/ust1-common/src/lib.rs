@@ -6,6 +6,9 @@
 //! - **INV-MATH-002**: Fee applies via basis points (`fee_bps`) using [`math::apply_fee_ust1`]; default 1% with
 //!   accounting split in [`fee_split`] (UST1 window + native wrap contracts).
 //! - **INV-SWAP-002**: Reverse gross UST1 → vFDUSD: see `math` module docs and `inv_swap_002_*` tests.
+//! - **INV-FEE-EVENT-001**: window wasm `fee_amount` is [`math::fee_amount_ust1`] (raw UST1 withheld);
+//!   see `ust1-window` deposit/withdraw and `skills/window-fee-amount-events`
+//!   ([#33](https://gitlab.com/PlasticDigits/ust1-window/-/issues/33)).
 
 pub mod error;
 pub mod fee_split;

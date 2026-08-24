@@ -7,6 +7,9 @@
 //!   `u * (BPS_DENOM - fee_bps) / BPS_DENOM * RATE_SCALE / R` (left-associative `/`, i.e. fee floor
 //!   then rate division). Implemented as [`withdraw_ust1_after_fee`] then [`ust1_after_fee_to_vfdusd`];
 //!   the public entry point is [`withdraw_gross_ust1_to_vfdusd`].
+//! - **INV-FEE-EVENT-001**: wasm `fee_amount` is raw UST1 withheld
+//!   (`gross_ust1 − apply_fee_ust1(gross_ust1, fee_bps)`). Never reconstruct from `ust1_out × bps`
+//!   or vFDUSD. See [`fee_amount_ust1`].
 
 use cosmwasm_std::{Uint128, Uint256};
 
@@ -20,6 +23,17 @@ pub fn apply_fee_ust1(amount: Uint128, fee_bps: u16) -> Result<Uint128, MathErro
     }
     let num = amount.checked_mul(Uint128::from(BPS_DENOM - fee_bps as u128))?;
     Ok(num.checked_div(Uint128::from(BPS_DENOM))?)
+}
+
+/// UST1 withheld by [`apply_fee_ust1`]: `gross − after_fee`.
+///
+/// **INV-FEE-EVENT-001**: this raw integer is what `ust1-window` emits as wasm `fee_amount`
+/// ([#33](https://gitlab.com/PlasticDigits/ust1-window/-/issues/33); DEX #614 ingest).
+/// Denomination is always UST1 (never vFDUSD / USD). Zero when `fee_bps == 0`.
+/// Do not invent the amount from `ust1_out × fee_total_bps` (deposit `ust1_out` is already net).
+pub fn fee_amount_ust1(gross_ust1: Uint128, fee_bps: u16) -> Result<Uint128, MathError> {
+    let after = apply_fee_ust1(gross_ust1, fee_bps)?;
+    Ok(gross_ust1.checked_sub(after)?)
 }
 
 /// vFDUSD atoms → UST1 atoms before fee: `x * R / RATE_SCALE`.
@@ -100,6 +114,29 @@ mod tests {
         let x = Uint128::from(10_000_000u128);
         let out = deposit_vfdusd_to_ust1(x, rate, 50).unwrap();
         assert!(out < x);
+    }
+
+    /// **INV-FEE-EVENT-001**: withheld UST1 is `gross − apply_fee_ust1`; zero fee withholds nothing.
+    #[test]
+    fn inv_fee_event_001_withheld_ust1_vectors() {
+        let cases: &[(u128, u16, u128)] = &[
+            (1_000_000, 100, 10_000),
+            (1_000_000, 0, 0),
+            (1_000_000, 10_000, 1_000_000),
+            (990_000, 100, 9_900),
+            (9, 9999, 9),
+        ];
+        for &(gross, fee_bps, expected) in cases {
+            let amount = Uint128::from(gross);
+            let withheld = fee_amount_ust1(amount, fee_bps).unwrap();
+            let after = apply_fee_ust1(amount, fee_bps).unwrap();
+            assert_eq!(
+                withheld,
+                Uint128::from(expected),
+                "INV-FEE-EVENT-001: gross={gross} fee_bps={fee_bps}"
+            );
+            assert_eq!(after.checked_add(withheld).unwrap(), amount);
+        }
     }
 
     /// **INV-SWAP-002** reverse path: gross UST1 → vFDUSD matches known integer vectors.
