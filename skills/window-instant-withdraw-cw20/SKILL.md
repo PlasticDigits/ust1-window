@@ -54,7 +54,7 @@ Pulls are **fail-closed** without `limit_24h` (ustr-cmm#7). Align quota with win
 2. **INV-WITHDRAW-002**: Response messages are ordered **Burn UST1 → InstantWithdrawCw20**; same tx; either failure reverts (no partial burn).
 3. **INV-SCHEMA-001**: Window InstantWithdrawCw20 JSON is byte-compatible with pinned ustr-cmm treasury `ExecuteMsg` (golden + `treasury_schema` + real treasury multitest). Stubs keep `cw_serde` / `deny_unknown_fields` — never loosen for “forward compat”.
 4. **Deposit unchanged**: vFDUSD `Transfer` → `cmm_treasury` after mint.
-5. **Guards preserved**: oracle usability (`INV-ORACLE-PAUSE-001` then freshness), fee math (`INV-SWAP-*` including **INV-SWAP-003/004** zero-output rejects — see [audit-hardening-bundle](../audit-hardening-bundle/SKILL.md) / [#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)), per-tx / rolling limits (`INV-LIMIT-001`), window pause, `min_vfdusd_out`. Prefer keep treasury balance check → `InsufficientVfdusd`. See [`oracle-circuit-breaker`](../oracle-circuit-breaker/SKILL.md).
+5. **Guards preserved**: oracle usability (`INV-ORACLE-PAUSE-001` then freshness), fee math (`INV-SWAP-*` including **INV-SWAP-003/004** zero-output rejects — see [audit-hardening-bundle](../audit-hardening-bundle/SKILL.md) / [#25](https://gitlab.com/PlasticDigits/ust1-window/-/issues/25)), per-tx / rolling limits (`INV-LIMIT-001`), window pause, `min_vfdusd_out`. Prefer keep treasury balance check → `InsufficientVfdusd`. See [`oracle-circuit-breaker`](../oracle-circuit-breaker/SKILL.md). Do not drop **INV-FEE-EVENT-001** `fee_amount` / `fee_asset` on withdraw wasm — [window-fee-amount-events](../window-fee-amount-events/SKILL.md) / [#33](https://gitlab.com/PlasticDigits/ust1-window/-/issues/33).
 6. **Recipient**: cw20 Send `sender` only (not attacker-controlled hook field).
 7. **`cmm_treasury` instantiate-only** unless a separate issue adds `SetTreasury`.
 8. **No public pull entry** on the window — only via UST1 `Receive` withdraw hook.
@@ -97,5 +97,6 @@ Key cases: golden / cross-crate schema match; stub rejects unknown fields; depos
 
 - Implementing treasury CW20 API (ustr-cmm).
 - Changing fee/limit params, oracle service, bridge, or `cmm-native-wrap`.
+- Window `fee_amount` / `fee_asset` ingest: [`window-fee-amount-events`](../window-fee-amount-events/SKILL.md) / [#33](https://gitlab.com/PlasticDigits/ust1-window/-/issues/33).
 - Mainnet live probe itself (ops / runbook — documented in DEPLOYMENT.md).
 - Oracle poll/silence vs window staleness: [`skills/oracle-ops-poll-silence`](../oracle-ops-poll-silence/SKILL.md) / [#24](https://gitlab.com/PlasticDigits/ust1-window/-/issues/24).

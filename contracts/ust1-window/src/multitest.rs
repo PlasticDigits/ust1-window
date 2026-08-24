@@ -1,6 +1,6 @@
 //! cw-multi-test coverage for **INV-LIMIT-001**, **INV-SWAP-001**, **INV-WITHDRAW-001/002**,
-//! **INV-ORACLE-PAUSE-001**, pause/ACL, and failure paths. Uses a stub treasury that accepts
-//! `InstantWithdrawCw20` (no CW20 allowance).
+//! **INV-ORACLE-PAUSE-001**, **INV-FEE-EVENT-001**, pause/ACL, and failure paths. Uses a stub
+//! treasury that accepts `InstantWithdrawCw20` (no CW20 allowance).
 
 use cosmwasm_std::{
     to_json_binary, Addr, Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response as CwResponse,
@@ -284,6 +284,31 @@ fn setup_with_treasury(reject_pulls: bool) -> TestEnv {
         window,
         window_code_id: window_id,
     }
+}
+
+fn window_swap_attrs(res: &cw_multi_test::AppResponse) -> &[cosmwasm_std::Attribute] {
+    for ev in res.events.iter().filter(|e| e.ty == "wasm") {
+        if ev
+            .attributes
+            .iter()
+            .any(|a| a.key == "action" && (a.value == "deposit" || a.value == "withdraw"))
+        {
+            return &ev.attributes;
+        }
+    }
+    panic!(
+        "missing window deposit/withdraw wasm event in {:?}",
+        res.events
+    );
+}
+
+fn wasm_attr(res: &cw_multi_test::AppResponse, key: &str) -> String {
+    window_swap_attrs(res)
+        .iter()
+        .find(|a| a.key == key)
+        .unwrap_or_else(|| panic!("missing window wasm attr {key}"))
+        .value
+        .clone()
 }
 
 fn cw20_balance(app: &App, token: &Addr, address: &Addr) -> Uint128 {
@@ -1670,4 +1695,217 @@ fn governance_propose_and_accept() {
         .query_wasm_smart(&window, &QueryMsg::Config {})
         .unwrap();
     assert_eq!(cfg.governance, new_gov.to_string());
+}
+
+/// **INV-FEE-EVENT-001**: deposit names withheld UST1 + UST1 token; existing 11566 attrs stay.
+#[test]
+fn inv_fee_event_001_deposit_emits_ust1_fee_amount() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        ust1,
+        window,
+        ..
+    } = setup();
+
+    assert_eq!(DEFAULT_FEE_BPS, 100);
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(10_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let dep = Uint128::from(1_000_000u128);
+    let res = app
+        .execute_contract(
+            user.clone(),
+            vfdusd.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: dep,
+                msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+            },
+            &[],
+        )
+        .unwrap();
+
+    let before =
+        ust1_common::math::vfdusd_to_ust1_before_fee(dep, Uint128::from(RATE_SCALE)).unwrap();
+    let expected_out = ust1_common::math::apply_fee_ust1(before, DEFAULT_FEE_BPS).unwrap();
+    let expected_fee = ust1_common::math::fee_amount_ust1(before, DEFAULT_FEE_BPS).unwrap();
+    assert_eq!(expected_fee, Uint128::from(10_000u128));
+    assert_eq!(expected_out, Uint128::from(990_000u128));
+
+    assert_eq!(wasm_attr(&res, "action"), "deposit");
+    assert_eq!(wasm_attr(&res, "ust1_out"), expected_out.to_string());
+    assert_eq!(
+        wasm_attr(&res, "fee_total_bps"),
+        DEFAULT_FEE_BPS.to_string()
+    );
+    assert_eq!(wasm_attr(&res, "fee_chain_tax_bps"), "50");
+    assert_eq!(wasm_attr(&res, "fee_cmm_protocol_bps"), "50");
+    assert_eq!(wasm_attr(&res, "vfdusd_to_treasury"), dep.to_string());
+    assert_eq!(wasm_attr(&res, "fee_amount"), expected_fee.to_string());
+    assert_eq!(wasm_attr(&res, "fee_asset"), ust1.to_string());
+    assert_ne!(wasm_attr(&res, "fee_asset"), vfdusd.to_string());
+    assert_eq!(cw20_balance(&app, &ust1, &user), expected_out);
+}
+
+/// **INV-FEE-EVENT-001**: withdraw names withheld UST1; `vfdusd_out` / min-out are not the fee.
+#[test]
+fn inv_fee_event_001_withdraw_emits_ust1_fee_amount() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        ust1,
+        window,
+        ..
+    } = setup();
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(10_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        user.clone(),
+        vfdusd.clone(),
+        &Cw20ExecuteMsg::Send {
+            contract: window.to_string(),
+            amount: Uint128::from(1_000_000u128),
+            msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let gross = cw20_balance(&app, &ust1, &user);
+    assert_eq!(gross, Uint128::from(990_000u128));
+    let expected_fee = ust1_common::math::fee_amount_ust1(gross, DEFAULT_FEE_BPS).unwrap();
+    let expected_v = ust1_common::math::withdraw_gross_ust1_to_vfdusd(
+        gross,
+        Uint128::from(RATE_SCALE),
+        DEFAULT_FEE_BPS,
+    )
+    .unwrap();
+    assert_eq!(expected_fee, Uint128::from(9_900u128));
+    assert_ne!(expected_fee, expected_v);
+
+    let min_out = Uint128::from(1u128);
+    let res = app
+        .execute_contract(
+            user.clone(),
+            ust1.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: gross,
+                msg: to_json_binary(&Cw20HookMsg::Withdraw {
+                    min_vfdusd_out: min_out,
+                })
+                .unwrap(),
+            },
+            &[],
+        )
+        .unwrap();
+
+    assert_eq!(wasm_attr(&res, "action"), "withdraw");
+    assert_eq!(wasm_attr(&res, "vfdusd_out"), expected_v.to_string());
+    assert_eq!(
+        wasm_attr(&res, "fee_total_bps"),
+        DEFAULT_FEE_BPS.to_string()
+    );
+    assert_eq!(wasm_attr(&res, "fee_amount"), expected_fee.to_string());
+    assert_eq!(wasm_attr(&res, "fee_asset"), ust1.to_string());
+    assert_ne!(wasm_attr(&res, "fee_asset"), vfdusd.to_string());
+    assert_ne!(wasm_attr(&res, "fee_amount"), wasm_attr(&res, "vfdusd_out"));
+    assert_ne!(wasm_attr(&res, "fee_amount"), min_out.to_string());
+    assert_eq!(
+        cw20_balance(&app, &vfdusd, &user),
+        Uint128::from(9_000_000u128) + expected_v
+    );
+}
+
+/// **INV-FEE-EVENT-001**: `fee_bps=0` must not invent a positive fee.
+#[test]
+fn inv_fee_event_001_zero_fee_emits_zero_amount() {
+    let TestEnv {
+        mut app,
+        owner,
+        user,
+        vfdusd,
+        ust1,
+        window,
+        ..
+    } = setup();
+
+    app.execute_contract(
+        owner.clone(),
+        window.clone(),
+        &ExecuteMsg::SetFeeBps { fee_bps: 0 },
+        &[],
+    )
+    .unwrap();
+
+    app.execute_contract(
+        owner.clone(),
+        vfdusd.clone(),
+        &cw20_mintable::msg::ExecuteMsg::Mint {
+            recipient: user.to_string(),
+            amount: Uint128::from(10_000_000u128),
+        },
+        &[],
+    )
+    .unwrap();
+
+    let dep = Uint128::from(1_000_000u128);
+    let dep_res = app
+        .execute_contract(
+            user.clone(),
+            vfdusd.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: dep,
+                msg: to_json_binary(&Cw20HookMsg::Deposit {}).unwrap(),
+            },
+            &[],
+        )
+        .unwrap();
+    assert_eq!(wasm_attr(&dep_res, "fee_amount"), "0");
+    assert_eq!(wasm_attr(&dep_res, "ust1_out"), dep.to_string());
+    assert_eq!(wasm_attr(&dep_res, "fee_asset"), ust1.to_string());
+
+    let wd_res = app
+        .execute_contract(
+            user,
+            ust1.clone(),
+            &Cw20ExecuteMsg::Send {
+                contract: window.to_string(),
+                amount: dep,
+                msg: to_json_binary(&Cw20HookMsg::Withdraw {
+                    min_vfdusd_out: Uint128::zero(),
+                })
+                .unwrap(),
+            },
+            &[],
+        )
+        .unwrap();
+    assert_eq!(wasm_attr(&wd_res, "fee_amount"), "0");
+    assert_eq!(wasm_attr(&wd_res, "vfdusd_out"), dep.to_string());
+    assert_eq!(wasm_attr(&wd_res, "fee_asset"), ust1.to_string());
 }
