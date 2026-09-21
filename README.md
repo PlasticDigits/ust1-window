@@ -103,6 +103,18 @@ make install-hooks                    # pre-commit install
 make precommit                        # pre-commit run --all-files
 ```
 
+## Merge gate
+
+Merge to `main` is a pull request, Woodpecker context
+`ci/woodpecker/pr/woodpecker`, and SHA-pinned `Do: merge`
+([architecture **H50**](docs/architecture.md)). Official CODEOWNERS review
+is not a merge gate. Do not re-add catch-all `CODEOWNERS`
+(`.* @code/maintainers`); see
+[ADR 0001](docs/adr/0001-remove-catchall-codeowners.md).
+GitHub/GitLab leftover hosting CI (the Gitleaks Action sentence under
+**Git hooks and secret scanning**, GitLab `rust`) is not the Forgejo
+required context and is not a merge hold.
+
 ## License
 
 MIT OR Apache-2.0 (see individual crates).

@@ -1,0 +1,16 @@
+# #50 land bootstrap. Posts context `ci/woodpecker/pr/woodpecker`.
+# Not this repo's product test gate. Cargo tests stay ungated.
+# Any later real CI must extend this same root file.
+# MUST path: repository-root `.woodpecker.yaml`.
+# Do not add `.woodpecker.yml` or `.woodpecker/`.
+
+when:
+  - event: [push, manual]
+    branch: main
+  - event: pull_request
+
+steps:
+  - name: tree
+    image: alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce
+    commands:
+      - test -n "$(find . -type f ! -path './.git/*' | head -1)"
